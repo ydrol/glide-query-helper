@@ -1,0 +1,1 @@
+# glide-query-helper
