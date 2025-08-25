@@ -67,7 +67,7 @@
 
     returns :
      [
-          { sys_id: "...", parent: { sys_id:"..", sys_class_name:"..." } , child: { sys_id:"..", u_salesforce_id:"..."} }
+          { sys_id: "...", parent: { sys_id:"..", sys_class_name:"..." } , child: { sys_id:"..", correlation_id:"..."} }
      ]
 
      It is not streaming, it does NOT support function calls for each row, it fetches ALL results.
@@ -107,33 +107,42 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
      */
     autoAddExtraFields: function(onOff) {
         this.ADD_EXTRA_FIELDS = !!onOff;
-        this.logInfo('add extra fields = {0}',this.ADD_EXTRA_FIELDS);
+        this._logInfo('add extra fields = {0}',this.ADD_EXTRA_FIELDS);
 
     },
 
     /**
-     * Query items and return fields
+     * Query items and return fields 
+     * Any dot-walked Fields in the select list are fetched during the query using addExtraField()
      * @param {object} queryDef 
  * @param {SelectList}           QueryDef.select - if one string return is string[] else RowResultFieldValues[]
  * @param {TableName}            QueryDef.from 
  * @param {WhereList}             QueryDef.where 
  * @param {integer}              QueryDef.limit 
  * @param {FieldName[]}          QueryDef.orderBy 
-     * @returns {string[]|RowResultFieldValues[]} Returns rows - either single vals 
-     * 
-     * @example:
-    {
-        select: [ parent , parent.sys_id , child.u_salesforce_id ],
-        from: 'cmdb_rel_ci',
+ * @returns {string[]|RowResultFieldValues[]} Returns rows - either single vals 
+ * 
+ * @example
+    let q = {
+        select : [ 'user.name', 'user.last_name', 'group.name' ],
+        from : 'sys_user_grmember',
         where: [
-            [ 'type', 'some sysid'] ,
-            ['parent.sys_class_name','cmdb_ci_hardware'],
-            [ 'parent' , [
-                [ 'sys_class_name' : 'cmdb_ci_hardware' ] 
-            ],
-            ['child.model_id.name' : 'LAG'
+            [ 'user.first_name' , 'IN',  'Alex,John'  ]
+            [ 'user.first_name' , ['Alex','John']  ] // Arrays can be passed directly - this is the same as above
         ]
     }
+     let api = new ScriptUtils_QueryHelper();
+     let rows = api.queryAll(q);
+     for(r of rows) {
+        gs.info(JSON.stringify(r));
+        gs.info(r.user.last_name);
+     }
+
+     OUTPUT:
+     {"sys_id":"44c85601d7b3020058c92cf65e6103e1","user":{"sys_id":"ff969201d7b3020058c92cf65e61036d","last_name":"Ray"}}
+     Ray
+    {"sys_id":"7c4c2495d703120058c92cf65e6103d5","user":{"sys_id":"36e1e015d703120058c92cf65e6103eb","last_name":"McGibbon"}}
+     McGibbon
     */
     queryAll: function( /** {QueryDef} */ queryDef  ) {
 
@@ -177,7 +186,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
                     let elemOK = source_gr[fld] !== undefined;
 
                     if (!elemOK) {
-                        self.logInfo('{0} = {1}',fld,source_gr[fld]);
+                        self._logInfo('{0} = {1}',fld,source_gr[fld]);
 
                         throw new Error(fld+' not found in '+elementTable(source_gr));
                     }
@@ -351,7 +360,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
             function addRef(fldPath) {
                 if (fldPath.indexOf('.') >= 0) {
 
-                    self.logInfo('addExtraField {0} = {1} ',fldPath,self.ADD_EXTRA_FIELDS);
+                    self._logInfo('addExtraField {0} = {1} ',fldPath,self.ADD_EXTRA_FIELDS);
                     if (self.ADD_EXTRA_FIELDS) {
                         any_gr.addExtraField(fldPath);
                     }
@@ -397,7 +406,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
                 addCols(columnsOut,'',selectList);
             }
 
-            self.logInfo('flattenedList {0}',JSON.stringify(columnsOut));
+            self._logInfo('flattenedList {0}',JSON.stringify(columnsOut));
 
             return columnsOut;
         }
@@ -412,11 +421,11 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
                     if (Array.isArray(orderVal)) {
                         for(let fname of orderVal) {
 
-                            self.logInfo('{0} {1}',orderProp,fname);
+                            self._logInfo('{0} {1}',orderProp,fname);
                             any_gr[grOrdeByMethod](fname);
                         }
                     } else {
-                        self.logInfo('{0} {1}',orderProp,orderVal);
+                        self._logInfo('{0} {1}',orderProp,orderVal);
                         any_gr[grOrdeByMethod](orderVal);
 
                     }
@@ -426,7 +435,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
             addOrder('orderByDesc','orderByDesc');
         }
 
-        self.logInfo(JSON.stringify(queryDef));
+        self._logInfo(JSON.stringify(queryDef));
 
         let any_gr = new GlideRecord(queryDef.from);
 
@@ -443,7 +452,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
 
         if (queryDef.limit) {
-            self.logInfo('limit {0}',queryDef.limit);
+            self._logInfo('limit {0}',queryDef.limit);
             any_gr.setLimit(queryDef.limit);
         }
 
@@ -469,7 +478,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
         }
         times.fetch = t() - times.start - times.query;
 
-        self.logInfo(' times {0}',JSON.stringify(times));
+        self._logInfo(' times {0}',JSON.stringify(times));
 
         return rows;
     },
@@ -540,7 +549,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
         let eq = any_gr.getEncodedQuery();
 
-        this.logInfo('Encoded query  {0}',eq);
+        this._logInfo('Encoded query  {0}',eq);
 
         if (!any_gr.isValidEncodedQuery(eq)) {
             throw new Error('Invalid query '+eq+ ' for ' +any_gr.getTableName());
@@ -560,27 +569,27 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
     /**
      * Log info message
      */
-    logInfo: function() {
-        this.log(gs.info,arguments);
+    _logInfo: function() {
+        this._log(gs.info,arguments);
     },
     /**
      * Log warn message
      */
-    logWarn: function() {
-        this.log(gs.warn,arguments);
+    _logWarn: function() {
+        this._log(gs.warn,arguments);
     },
     /**
      * Log warn message
      */
-    logError: function() {
-        this.log(gs.error,arguments);
+    _logError: function() {
+        this._log(gs.error,arguments);
     },
     /**
      * Log a message with testId Prefix
      * @param {gs log function} logger 
      * @param {arguments} args 
      */
-    log: function(gsLogFn,args) {
+    _log: function(gsLogFn,args) {
         
         let a = [];
         a.push(...args);
@@ -594,15 +603,15 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
         function t(q,autoAdd) {
 
-            self.logInfo('test autoadd={0}',autoAdd);
+            self._logInfo('test autoadd={0}',autoAdd);
 
             self.autoAddExtraFields(autoAdd);
 
             let rows = self.queryAll(q);
 
             for(let r of rows) {
-                self.logInfo(JSON.stringify(r));
-                self.logInfo(r.user.last_name);
+                self._logInfo(JSON.stringify(r));
+                self._logInfo(r.user.last_name);
             }
         }
         let q = {
