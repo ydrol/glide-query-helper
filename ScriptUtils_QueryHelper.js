@@ -1,6 +1,6 @@
 /** ES6+ Script
  * 
- * JSDoc generated using jsdoc -d=. ScriptUtils_GlideQuery.js
+ * JSDoc generated using jsdoc -d=./docs/ ScriptUtils_QueryHelper.js
 
  * @typedef {string} EncodedQueryString Encoded Query
  *
@@ -47,19 +47,18 @@
     */
 
 /**
- * @class ScriptUtils_GlideQueryHelper
+ * @class ScriptUtils_QueryHelper
  * 
  * 
  *@example
     {
         select: [ parent , parent.sys_class_name , child.correlation_id ],
         from: 'cmdb_rel_ci',
-        where: {
-            type: 'some sysid',
-            "parent.sys_class_name" : 'cmdb_ci_hardware',
-            parent : { sys_class_name : 'cmdb_ci_hardware' },
-            "child.model_id.name" : 'MODEL'
-        }
+        where: [
+            [ 'type' : 'some sysid' ],
+            [ "parent.sys_class_name" , 'cmdb_ci_hardware' ],
+            [ "child.model_id.name" , 'MODEL ]
+        ]
         orderBy: fieldName,
         orderByDesc: fieldNames
         limit: n
