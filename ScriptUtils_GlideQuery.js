@@ -1,0 +1,631 @@
+/** ES6+ Script
+ * 
+ * JSDoc generated using jsdoc -d=. ScriptUtils_GlideQuery.js
+
+ * @typedef {string} EncodedQueryString Encoded Query
+ *
+ * @typedef {string} TableName e.g. cmdb_ci
+ *
+ * @typedef {string} FieldName e.g. sys_id
+
+ * @typedef {string} QueryValue e.g. any string also 'NULL' and 'NOT NULL' are special
+
+ * @typedef {string} FieldValue any string
+
+ * @typedef {string} DotWalkFieldName e.g. parent.sys_id
+ *
+ * @typedef {[DotWalkFieldName,QueryValue]} WhereEquals
+ * @typedef {[DotWalkFieldName,Op,QueryValue]} WhereOp
+ * @typedef {(EncodedQueryString|WhereEquals|WhereOp)} WhereClause
+ * @typedef {WhereClause[])} WhereList
+ * 
+ * @typedef {Object.<FieldName,FieldValue>} RowResultFieldValues
+ *
+ * @typedef {(FieldName|DotWalkFieldName)} SelectItemSimple
+ *
+ * @typedef {(SelectItemSimple|Object.<FieldName,FieldName[]>)} SelectItem
+ *
+ * @typedef {(SelectItem|SelectItem[])}  SelectList
+ *   
+ * @typedef {Object} QueryDef 
+ * @property {SelectList}           QueryDef.select - if one string return is string[] else RowResultFieldValues[]
+ * @property {TableName}            QueryDef.from 
+ * @property {WhereList}             QueryDef.where 
+ * @property {integer}              QueryDef.limit 
+ * @property {FieldName[]}          QueryDef.orderBy 
+ * @example:
+    {
+        select: [ parent , parent.sys_id , child.correlation_id ],
+        from: 'cmdb_rel_ci',
+        where: {
+            type: 'some sysid',
+            parent.sys_class_name : 'cmdb_ci_hardware',
+            parent : { sys_class_name : 'cmdb_ci_hardware' },
+            child.model_id.name : 'MODEL'
+        }
+    }
+    */
+
+/**
+ * @class ScriptUtils_GlideQueryHelper
+ * 
+ * 
+ *@example
+    {
+        select: [ parent , parent.sys_class_name , child.correlation_id ],
+        from: 'cmdb_rel_ci',
+        where: {
+            type: 'some sysid',
+            "parent.sys_class_name" : 'cmdb_ci_hardware',
+            parent : { sys_class_name : 'cmdb_ci_hardware' },
+            "child.model_id.name" : 'MODEL'
+        }
+        orderBy: fieldName,
+        orderByDesc: fieldNames
+        limit: n
+    }
+
+    returns :
+     [
+          { sys_id: "...", parent: { sys_id:"..", sys_class_name:"..." } , child: { sys_id:"..", u_salesforce_id:"..."} }
+     ]
+
+     It is not streaming, it does NOT support function calls for each row, it fetches ALL results.
+     Joins are implicit via dot.walked fields.
+
+     Notes: 
+     SQL was probably prohibited for security reasons , and functionality as it doesnt use the class model.
+     Unknown fields were probably dropped from the Glide query to simplify queries at different class levels?
+
+     Notes:
+     addJoinTable 
+     
+          creates  a sub query place holder (CHILD IN PLACEHOLDER) - use case is filtering on documentId fields.
+
+     addExtraField
+          addExtraField('child.xxx) appears to also fetch name, sys_class_name, sys_id 
+     it makes no difference to the encoded query on the GR. 
+     It does NOT return error status to application but is ignored. (error is logged but not flagged in calling code) typical SN)
+
+     To verify if a dot.walked field will force a DB query check if the propery exists before accessing it
+     (NB it looks like GlideRecord is now more opaque and lo longer exposes internal methods at the field level)
+
+     So fetched = ('sys_id' in gr.child );
+
+ */
+
+var ScriptUtils_QueryHelper = Class.create();
+ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype */ {
+    initialize: function() {
+        // Define settings within the instance not the prototype
+        this.ADD_EXTRA_FIELDS = true;
+    },
+
+    /**
+     *  Enable/Disable addExtraFields() - default enable - mainly for testing
+     * @param {boolean} onOff 
+     */
+    autoAddExtraFields: function(onOff) {
+        this.ADD_EXTRA_FIELDS = !!onOff;
+        this.logInfo('add extra fields = {0}',this.ADD_EXTRA_FIELDS);
+
+    },
+
+    /**
+     * Query items and return fields
+     * @param {object} queryDef 
+ * @param {SelectList}           QueryDef.select - if one string return is string[] else RowResultFieldValues[]
+ * @param {TableName}            QueryDef.from 
+ * @param {WhereList}             QueryDef.where 
+ * @param {integer}              QueryDef.limit 
+ * @param {FieldName[]}          QueryDef.orderBy 
+     * @returns {string[]|RowResultFieldValues[]} Returns rows - either single vals 
+     * 
+     * @example:
+    {
+        select: [ parent , parent.sys_id , child.u_salesforce_id ],
+        from: 'cmdb_rel_ci',
+        where: [
+            [ 'type', 'some sysid'] ,
+            ['parent.sys_class_name','cmdb_ci_hardware'],
+            [ 'parent' , [
+                [ 'sys_class_name' : 'cmdb_ci_hardware' ] 
+            ],
+            ['child.model_id.name' : 'LAG'
+        ]
+    }
+    */
+    queryAll: function( /** {QueryDef} */ queryDef  ) {
+
+        var self = this;
+
+        let parts = new Set(['select','from','where','orderBy','orderByDesc','limit']);
+        let unknown = this.arrayDifference(Object.keys(queryDef),parts);
+        if (unknown.length) {
+            throw new Error('unknown fields '+unknown.join());
+        }
+
+        /**
+         * Get the table that a GlideRecord or GlideElement refers to.
+         * @param {GlideElement} elem 
+         * @returns 
+         */
+        function elementTable(elem) {
+
+            let t = elem.getReferenceTable();
+            if (t === undefined ) {
+                t = elem.getTableName();
+            }
+            return t;
+        }
+
+        /**
+         * get values from the row and output a row object
+         * @param {GlideRecord} any_gr 
+         * @param {RowResultFieldValues} rowTemplate  field names to return
+         * @returns {RowResultFieldValues} field values
+         */
+        function buildRow(any_gr,rowTemplate) {
+
+            let result = {};
+
+            function mergeCols(target,source_gr,template ) {
+
+                for(let fld in template) {
+                    
+                    //let elemOK = fld in source_gr;
+                    let elemOK = source_gr[fld] !== undefined;
+
+                    if (!elemOK) {
+                        self.logInfo('{0} = {1}',fld,source_gr[fld]);
+
+                        throw new Error(fld+' not found in '+elementTable(source_gr));
+                    }
+
+                    if (template[fld] === true) {
+
+                        target[fld] = source_gr[fld].getValue();
+
+                    } else {
+
+                        if (!target[fld]) target[fld] = {};
+
+                        mergeCols(target[fld] , source_gr[fld] , template[fld]);
+                    }
+                }
+            }
+            
+            mergeCols(result, any_gr , rowTemplate  );
+
+            return result;
+        }
+
+        /**
+         * Convert list of field selectors to row template structure.
+         * This will be the same as a row except values are 'true'
+         * 
+         *  Convert [ 'fld0', 'ref1.ref2.fld' , 'ref1.ref3' ]  => {
+         *      fld0: true, 
+         *      ref1: { 
+         *          ref2: { fld: true },
+         *          ref3: true
+         *      }
+         *  }
+         * @param {SelectItemSimple[]} flattenedSelectFields 
+         * @returns {RowResultFieldValues}
+         */
+        function buildRowTemplate(flattenedSelectFields) {
+            
+            // Add ref1.ref2.fld => { ref1: { ref2: { fld: true }}}
+
+            function defaultCols() {
+                return {
+                    sys_id: true 
+                    // ,sys_class_name: true 
+                };
+            }
+
+            /**
+             * Build a row template (same as a rowResult but with all values = true )
+             * eg { sys_id: true , caller : { sys_id: true }}
+             * @param {DotWalkFieldName} dotfield 
+             * @param {RowResultFieldValues} template 
+             */
+            function addColumn(dotfield,template) {
+                let parts = dotfield.split('.');
+                let last = parts.pop();
+                let t = template;
+                for(let part of parts) {
+
+                    if (!(part in t) ) {
+
+                        t[part] = defaultCols();
+                    }
+
+                    t = t[part];
+                }
+                t[last] = true;
+            }
+
+            let template = defaultCols();
+
+            for(let dotfield of flattenedSelectFields ) {
+                addColumn(dotfield,template);
+            }
+            return template;
+        }
+        /**
+         * Apply the where object to the Glide object.
+         * It will be validated just before the query is executed
+         * as some fields might be DotWalkFieldName
+         * @param {GlideRecord} any_gr 
+         * @param {WhereList} whereObj 
+         */
+        function applyQuery(any_gr,whereObj) {
+
+            function applyClause(clause) {
+
+                let eq1 = any_gr.getEncodedQuery();
+
+                if (false && typeof clause === 'string' ) {
+                    // Dont alow strings
+                    any_gr.addQuery(clause);
+                } else {
+                    if (!Array.isArray(clause)) {
+
+                        throw new Error('clause must be encodedString or array '+JSON.stringify(clause));
+                    }
+                    if (clause.length < 1 || clause.length > 3 ) {
+
+                        throw new Error('Invalid clause '+JSON.stringify(clause));
+
+                    } else if (clause.length === 2 && Array.isArray(clause[1])) {
+
+                        any_gr.addQuery(clause[0],'IN',clause[1].join());
+
+                    } else {
+
+                        // Call addQuery
+                        any_gr.addQuery.apply(any_gr,clause);
+                    }
+                }
+                let eq2 = any_gr.getEncodedQuery();
+
+                if (eq1 === eq2) {
+                    throw new Error('Error adding clause '+clause);
+                }
+            }
+
+            function applyClauses(whereObj) {
+
+                for (let clause of whereObj) {
+
+                    applyClause(clause);
+
+                }
+            }
+
+            if (typeof whereObj === 'string' ) {
+                applyClauses([whereObj]);
+            } else {
+                applyClauses(whereObj);
+            }
+        }
+        /**
+         * Call gr.addExtraField() to fetch related columns during the inital select.
+         * Then these fields can be access via dot walk after gr.next()
+         * The code is not any differen but the record fields have been pre-fetched
+         * so the dot-walk does not trigger an additional DB query.
+         * 
+         * addExtraField is new with Washington
+         * 
+         * if the select contains either a dotWalk field e.g. 'referenceName.name'
+         * or an object with an array Property e.g. { referenceName: ['name', 'sys_id'] }
+         * see SelectList
+         * 
+         * By default it also adds the following related fields from the related table.
+         * - reference.sys_id
+         * - reference.name
+         * - reference.sys_class_name
+         * 
+         * If an invalid field is added, this is logged by servicenow but no error is 
+         * returned to the application. Instead after the main record is fetched -
+         * we can verify that the record has been pre-fetched using..
+         
+        gr.addExtraField('reference.someField');
+
+        * while(gr.next()) {
+        *   if (!('someField' in gr.reference )) {
+        *      gs.warn('field was not prefetched');
+        *   }
+        *   val = gr.reference.someField.getValue();
+        * }
+        * @param {GlideRecord} any_gr
+        * @param {DotWalkFieldName[]} flattenedFields
+        */
+        function addReferencedFields(any_gr,flattenedFields) {
+            
+            /**
+             * @param {DotWalkFieldName} fldPath 
+             */
+            function addRef(fldPath) {
+                if (fldPath.indexOf('.') >= 0) {
+
+                    self.logInfo('addExtraField {0} = {1} ',fldPath,self.ADD_EXTRA_FIELDS);
+                    if (self.ADD_EXTRA_FIELDS) {
+                        any_gr.addExtraField(fldPath);
+                    }
+                }
+            }
+
+            for(let fInfo of flattenedFields) {
+                addRef(fInfo)
+            }
+        }
+        /**
+         * If there are any nestedSelect items then flatten them
+         * eg. [ 
+         *  'sys_id' , 
+         *  { parent: [ 'sys_id', 'name' ] }
+
+        * ] => [ 'sys_id' , 'parent.sys_id' , 'parent.name' ]
+        * 
+        * @param {SelectList} selectList 
+        */
+        function flattenSelectList(selectList) {
+
+            function addCols(columns,prefix,cols) {
+                for(let c of cols) {
+                    if (typeof c === 'string' ) {
+                        columns.push(prefix + c);
+                    } else {
+                        for(let prop in c) {
+                            addCols(prefix+prop+'.',c[prop]);
+                        }
+                    }
+                }
+            }
+            
+            let columnsOut = [];
+
+            if (typeof selectList === 'string' ) {
+
+                addCols(columnsOut,'',[selectList]);
+
+            } else {
+
+                addCols(columnsOut,'',selectList);
+            }
+
+            self.logInfo('flattenedList {0}',JSON.stringify(columnsOut));
+
+            return columnsOut;
+        }
+
+        function addOrderBy(any_gr) {
+
+            function addOrder(orderProp,grOrdeByMethod) {
+
+                let orderVal = queryDef[orderProp];
+
+                if (orderVal) {
+                    if (Array.isArray(orderVal)) {
+                        for(let fname of orderVal) {
+
+                            self.logInfo('{0} {1}',orderProp,fname);
+                            any_gr[grOrdeByMethod](fname);
+                        }
+                    } else {
+                        self.logInfo('{0} {1}',orderProp,orderVal);
+                        any_gr[grOrdeByMethod](orderVal);
+
+                    }
+                }
+            }
+            addOrder('orderBy','orderBy');
+            addOrder('orderByDesc','orderByDesc');
+        }
+
+        self.logInfo(JSON.stringify(queryDef));
+
+        let any_gr = new GlideRecord(queryDef.from);
+
+        if (!any_gr.isValid()) throw new Error('unknown table '+queryDef.from);
+
+        applyQuery(any_gr,queryDef.where);
+
+
+        let flattenedSelectFields = flattenSelectList(queryDef.select);
+
+        addReferencedFields(any_gr,flattenedSelectFields);
+
+        addOrderBy(any_gr);
+
+
+        if (queryDef.limit) {
+            self.logInfo('limit {0}',queryDef.limit);
+            any_gr.setLimit(queryDef.limit);
+        }
+
+        let rows = [];
+
+        function t()  {
+            return new Date().getTime();
+        }
+        let times = {
+            start : t()
+        }
+        
+        let rowTemplate = buildRowTemplate(flattenedSelectFields);
+
+        self.querySafe(any_gr);
+
+        times.query = t() - times.start;
+
+        while(any_gr.next()) {
+
+            rows.push(buildRow(any_gr,rowTemplate));
+
+        }
+        times.fetch = t() - times.start - times.query;
+
+        self.logInfo(' times {0}',JSON.stringify(times));
+
+        return rows;
+    },
+
+
+    /**
+     * Extract the field from the row
+     * @param {RowResultFieldValues[]} rowsIn 
+     * @param {string} dotWalkName eg 'parent', 'child' , ''
+     * @param {string} fieldName 
+     * @returns {string[]} list of field values
+     */
+    rowsExtractField: function(rowsIn, dotWalkName , fieldName ) {
+
+        if (dotWalkName) {
+            return rowsIn.map( function(r) { return r[dotWalkName][fieldName]; });
+        } else {
+            return rowsIn.map( function(r) { return r[fieldName]; });
+        }
+    },
+
+    /**
+     * Convert array to object
+     * @param {string[]} array 
+     * @returns {Object.<string,true>}
+     */
+    _arrayToMap: function(array) {
+        
+        function addItem(set,item) { set[''+item] = true; }
+
+        return array.reduce(addItem,{});
+    },
+
+    /**
+     * 
+     * @param {RowResultFieldValues[]} rowsIn 
+     * @param {string} dotWalkName eg 'parent', 'child' or ''
+     * @param {sys_id[]} sysids 
+     */
+    _filterRowsBySysids: function(rowsIn,dotWalkName,sysids) {
+
+        let set = this._arrayToMap(sysids);
+        let rowsOut;
+
+        if (dotWalkName) {
+            rowsOut = rowsIn.filter( function(r) { return (r[dotWalkName].sys_id in set); } );
+        } else {
+            rowsOut = rowsIn.filter( function(r) { return (r.sys_id in set); } );
+        }
+        return rowsOut;
+    },
+
+    /**
+     * Add array a2 onto a1
+     * @param {Array} target 
+     * @param {Array} source 
+     */
+    addArray: function(target,source) {
+        Array.prototype.push.apply(target,source);
+        return target;
+    },
+
+    /**
+     * Run a query only if query is valid
+     * @param {GlideRecord} any_gr 
+     */
+    querySafe: function(any_gr) {
+
+        let eq = any_gr.getEncodedQuery();
+
+        this.logInfo('Encoded query  {0}',eq);
+
+        if (!any_gr.isValidEncodedQuery(eq)) {
+            throw new Error('Invalid query '+eq+ ' for ' +any_gr.getTableName());
+        }
+        any_gr.query();
+    },
+
+    /**
+     * 
+     * @param {FieldNameToValuesObj} targetMap 
+     * @param {FieldNameToValuesObj} sourceMap 
+     * @returns {FieldNameToValuesObj} targetMap
+     */
+    _fieldMapMerge: function(targetMap,sourceMap) {
+        return Object.assign(targetMap,sourceMap);
+    },
+    /**
+     * Log info message
+     */
+    logInfo: function() {
+        this.log(gs.info,arguments);
+    },
+    /**
+     * Log warn message
+     */
+    logWarn: function() {
+        this.log(gs.warn,arguments);
+    },
+    /**
+     * Log warn message
+     */
+    logError: function() {
+        this.log(gs.error,arguments);
+    },
+    /**
+     * Log a message with testId Prefix
+     * @param {gs log function} logger 
+     * @param {arguments} args 
+     */
+    log: function(gsLogFn,args) {
+        
+        let a = [];
+        a.push(...args);
+        a[0] = 'QueryHelper:'+a[0];
+        gsLogFn.apply(gs,a);
+    },
+
+    test: function() {
+
+        let self = this;
+
+        function t(q,autoAdd) {
+
+            self.logInfo('test autoadd={0}',autoAdd);
+
+            self.autoAddExtraFields(autoAdd);
+
+            let rows = self.queryAll(q);
+
+            for(let r of rows) {
+                self.logInfo(JSON.stringify(r));
+                self.logInfo(r.user.last_name);
+            }
+        }
+        let q = {
+            select : [ 'user.name', 'user.last_name', 'group.name' ],
+            from : 'sys_user_grmember',
+            where: [
+                [ 'user.first_name' , 'Alex'  ]
+            ]
+        };
+
+        t(q,true);
+        t(q,false);
+
+    },
+
+    // This function acts as a 'difference' method for arrays.
+    arrayDifference: function(arr1, arr2) {
+        // Create a Set from the second array for fast lookups.
+        const set2 = new Set(arr2);
+  
+        // Filter the first array, keeping only items NOT in the second Set.
+        return arr1.filter(item => !set2.has(item));
+    },
+
+    type: 'ScriptUtils_QueryHelper'
+}
