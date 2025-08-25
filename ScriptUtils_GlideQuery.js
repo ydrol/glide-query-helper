@@ -143,6 +143,8 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
      Ray
     {"sys_id":"7c4c2495d703120058c92cf65e6103d5","user":{"sys_id":"36e1e015d703120058c92cf65e6103eb","last_name":"McGibbon"}}
      McGibbon
+    
+     TODO where is group name
     */
     queryAll: function( /** {QueryDef} */ queryDef  ) {
 
