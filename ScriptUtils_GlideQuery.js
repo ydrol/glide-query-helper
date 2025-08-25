@@ -17,7 +17,7 @@
  * @typedef {[DotWalkFieldName,QueryValue]} WhereEquals
  * @typedef {[DotWalkFieldName,Op,QueryValue]} WhereOp
  * @typedef {(EncodedQueryString|WhereEquals|WhereOp)} WhereClause
- * @typedef {WhereClause[])} WhereList
+ * @typedef {WhereClause[]} WhereList
  * 
  * @typedef {Object.<FieldName,FieldValue>} RowResultFieldValues
  *
