@@ -57,9 +57,15 @@
                 }
             ]
             // RLQUERY
-            [ "RLQUERY" : { table: t2,
-                            field: f2
-                              }]
+            [ {
+                    type: 'RLQUERY',
+                    table: t2,
+                    field: f2
+                    where: [
+                        ['state' , 3 ]
+                    ]
+                } , '>' , 0 ]
+                              
         ]
         orderBy: fieldName,
         orderByDesc: fieldNames
