@@ -284,10 +284,10 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
          * Apply the where object to the Glide object.
          * It will be validated just before the query is executed
          * as some fields might be DotWalkFieldName
-         * @param {GlideRecord} any_gr 
+         * @param {GlideRecord} start_gr 
          * @param {string} where_and_or 
          */
-        function applyQuery(any_gr,conditionObj,where_and_or) {
+        function applyQuery(start_gr,conditionObj,where_and_or) {
 
             /**
              * 
@@ -299,7 +299,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
                 if (false && typeof clause === 'string' ) {
                     // Dont alow strings
-                    addFunction.apply(glideRecordOrCondition,clause);
+                    return addFunction.apply(glideRecordOrCondition,clause);
 
                 } else if (Array.isArray(clause)) {
 
@@ -311,54 +311,109 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
                         if (clause.length === 2 && Array.isArray(clause[1])) {
 
-                            addFunction.call(glideRecordOrCondition,clause[0],'IN',clause[1].join());
+                            return addFunction.call(glideRecordOrCondition,clause[0],'IN',clause[1].join());
 
                         } else {
 
-                            addFunction.apply(glideRecordOrCondition,clause);
+                            return addFunction.apply(glideRecordOrCondition,clause);
                         }
                     }
                 } else if (typeof clause === 'object') {
+
                     if (clause.and) {
 
+                        return createConditionApplyClauses(glideRecordOrCondition,'and',clause.and);
+
                     } else if (clause.or) {
-TODO                        
+
+                        return createConditionApplyClauses(glideRecordOrCondition,'or',clause.or);
+                    } else {
+                        throw new Error('expected and/or property');
                     }
-                }
                 } else {
-                    throw new Error('clause must be encodedString or array '+JSON.stringify(clause));
+                    throw new Error('clause must be encodedString or [field,val] or [field,op,val] or { and: [ ... ] } or { or: [ ... ] } '+JSON.stringify(clause));
                 }
             }
 
-            function applyClauses(glideRecordOrCondition,opKeyword_WhereAndOr,clauseList) {
+            function getAddFunction(glideRecordOrCondition,opKeyword_WhereAndOr) {
 
-                let addFunction;
+                let addFunctionName;
 
-                if (glideRecordOrCondition === any_gr ) {
+                if (glideRecordOrCondition === start_gr ) {
                     if (opKeyword_WhereAndOr !== 'where') throw new Error('expected "where" keyword');
-                    addFunction = 'addQuery';
+                    addFunctionName = 'addQuery';
                 } else if (opKeyword_WhereAndOr === 'and') {
-                    addFunction = 'addCondition';
+                    addFunctionName = 'addCondition';
                 } else {
-                    addFunction = 'addOrCondition';
+                    addFunctionName = 'addOrCondition';
                 }
-                if (glideRecordOrCondition[addFunction] === undefined) {
-                    throw new Error('unable to find function '+addFunction);
+                if (glideRecordOrCondition[addFunctionName] === undefined) {
+                    throw new Error('unable to find function '+addFunctionName);
                 }
+                return glideRecordOrCondition[addFunctionName];
+            }
+
+            /**
+             * The SN API builds the following:
+             * 
+             * top level WHERE
+             * 
+             * gr.addQuery();
+             * gr.addQuery();
+             * gr.addQuery();
+             * 
+             * { where: [....]}
+             * 
+             * top level AND
+             * cond.addCondition();
+             * cond.addCondition();
+             * cond.addCondition();
+             * 
+             * top level OR
+             * gr.addQuery().addOrCondition().addOrCondition()
+             * { where: [ ...,  {or: [ ..... ]} , ....]}
+             * 
+             * cond.addOrCondition();
+             * cond.addOrCondition();
+             * cond.addOrCondition();
+             * 
+             * @param {*} startGR 
+             * @param {*} clauseList 
+             */
+            function applyClausesToGR(startGR,clauseList) {
 
                 for (let clause of clauseList) {
 
-                    applyClause(glideRecordOrCondition,glideRecordOrCondition[addFunction],clause);
+                    applyClause(startGR,startGR.addQuery,clause);
 
                 }
+            }
+            function createConditionApplyClauses(parentRecordOrCondition,opKeyword_WhereAndOr,clauseList) {
+
+                // TODO
+                let addQueryConditionFn = getAddFunction(parentRecordOrCondition,opKeyword_WhereAndOr);
+
+                let target;
+                let firstCondition;
+                
+
+                let firstClause = clauseList.shift();
+                firstCondition = applyClause(parentRecordOrCondition,addQueryConditionFn,clause);
+
+                for (let clause of clauseList) {
+
+                    applyClause(parentRecordOrCondition,addQueryConditionFn,clause);
+
+                }
+                return firstCondition;
             }
 
             let clauseList = conditionObj[where_and_or];
 
             if (typeof clauseList === 'string' ) {
-                applyClauses(any_gr,where_and_or,[clauseList]);
+                applyClausesToGR(start_gr,[clauseList]);
             } else {
-                applyClauses(any_gr,where_and_or,clauseList);
+                applyClausesToGR(start_gr,clauseList);
             }
         }
         /**
