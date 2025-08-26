@@ -46,7 +46,12 @@
         where: [
             [ 'type' : 'some sysid' ],
             [ "parent.sys_class_name" , 'cmdb_ci_hardware' ],
-            [ "child.model_id.name" , 'MODEL ]
+            [
+                [ "child.model_id.name" , 'MODEL1' ] ,
+                [ "child.model_id.name" , 'MODEL2' ] 
+            ]
+            { or: [ "child.model_id.name" , 'MODEL' ] }
+
             // addJoinQuery(table2, field , table2field ).addQuery('state','3')
             [ "field" : {
                 select: table2field,
