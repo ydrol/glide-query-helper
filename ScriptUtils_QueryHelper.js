@@ -44,13 +44,16 @@
         select: [ parent , parent.sys_class_name , child.correlation_id ],
         from: 'cmdb_rel_ci',
         where: [
-            [ 'type' : 'some sysid' ],
-            [ "parent.sys_class_name" , 'cmdb_ci_hardware' ],
-            [
-                [ "child.model_id.name" , 'MODEL1' ] ,
-                [ "child.model_id.name" , 'MODEL2' ] 
+                [ 'type' : 'some sysid' ],
+                [ "parent.sys_class_name" , 'cmdb_ci_hardware' ],
+                { or: [
+                    [ "child.model_id.name" , 'MODEL1' ] ,
+                    [ "child.model_id.name" , 'MODEL2' ] 
+                  ]
+                }
             ]
-            { or: [ "child.model_id.name" , 'MODEL' ] }
+        where: {or: [] }
+        where: {and: [] }
 
             // addJoinQuery(table2, field , table2field ).addQuery('state','3')
             [ "field" : {
@@ -282,56 +285,80 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
          * It will be validated just before the query is executed
          * as some fields might be DotWalkFieldName
          * @param {GlideRecord} any_gr 
-         * @param {WhereList} whereObj 
+         * @param {string} where_and_or 
          */
-        function applyQuery(any_gr,whereObj) {
+        function applyQuery(any_gr,conditionObj,where_and_or) {
 
-            function applyClause(clause) {
-
-                let eq1 = any_gr.getEncodedQuery();
+            /**
+             * 
+             * @param {(GlideRecord|GlideQueryCondition)} glideRecordOrCondition 
+             * @param {function} addFunction addQuery or addCondition or addOrCondition
+             * @param {object[]} clause one,two or three args passed to addQuery
+             */
+            function applyClause(glideRecordOrCondition,addFunction,clause) {
 
                 if (false && typeof clause === 'string' ) {
                     // Dont alow strings
-                    any_gr.addQuery(clause);
-                } else {
-                    if (!Array.isArray(clause)) {
+                    addFunction.apply(glideRecordOrCondition,clause);
 
-                        throw new Error('clause must be encodedString or array '+JSON.stringify(clause));
-                    }
+                } else if (Array.isArray(clause)) {
+
                     if (clause.length < 1 || clause.length > 3 ) {
 
                         throw new Error('Invalid clause '+JSON.stringify(clause));
 
-                    } else if (clause.length === 2 && Array.isArray(clause[1])) {
-
-                        any_gr.addQuery(clause[0],'IN',clause[1].join());
-
                     } else {
 
-                        // Call addQuery
-                        any_gr.addQuery.apply(any_gr,clause);
+                        if (clause.length === 2 && Array.isArray(clause[1])) {
+
+                            addFunction.call(glideRecordOrCondition,clause[0],'IN',clause[1].join());
+
+                        } else {
+
+                            addFunction.apply(glideRecordOrCondition,clause);
+                        }
+                    }
+                } else if (typeof clause === 'object') {
+                    if (clause.and) {
+
+                    } else if (clause.or) {
+TODO                        
                     }
                 }
-                let eq2 = any_gr.getEncodedQuery();
-
-                if (eq1 === eq2) {
-                    throw new Error('Error adding clause '+clause);
+                } else {
+                    throw new Error('clause must be encodedString or array '+JSON.stringify(clause));
                 }
             }
 
-            function applyClauses(whereObj) {
+            function applyClauses(glideRecordOrCondition,opKeyword_WhereAndOr,clauseList) {
 
-                for (let clause of whereObj) {
+                let addFunction;
 
-                    applyClause(clause);
+                if (glideRecordOrCondition === any_gr ) {
+                    if (opKeyword_WhereAndOr !== 'where') throw new Error('expected "where" keyword');
+                    addFunction = 'addQuery';
+                } else if (opKeyword_WhereAndOr === 'and') {
+                    addFunction = 'addCondition';
+                } else {
+                    addFunction = 'addOrCondition';
+                }
+                if (glideRecordOrCondition[addFunction] === undefined) {
+                    throw new Error('unable to find function '+addFunction);
+                }
+
+                for (let clause of clauseList) {
+
+                    applyClause(glideRecordOrCondition,glideRecordOrCondition[addFunction],clause);
 
                 }
             }
 
-            if (typeof whereObj === 'string' ) {
-                applyClauses([whereObj]);
+            let clauseList = conditionObj[where_and_or];
+
+            if (typeof clauseList === 'string' ) {
+                applyClauses(any_gr,where_and_or,[clauseList]);
             } else {
-                applyClauses(whereObj);
+                applyClauses(any_gr,where_and_or,clauseList);
             }
         }
         /**
@@ -455,7 +482,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
         if (!any_gr.isValid()) throw new Error('unknown table '+queryDef.from);
 
-        applyQuery(any_gr,queryDef.where);
+        applyQuery(any_gr,queryDef,'where');
 
 
         let flattenedSelectFields = flattenSelectList(queryDef.select);
