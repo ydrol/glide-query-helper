@@ -33,17 +33,6 @@
  * @property {WhereList}             QueryDef.where 
  * @property {integer}              QueryDef.limit 
  * @property {FieldName[]}          QueryDef.orderBy 
- * @example:
-    {
-        select: [ parent , parent.sys_id , child.correlation_id ],
-        from: 'cmdb_rel_ci',
-        where: {
-            type: 'some sysid',
-            parent.sys_class_name : 'cmdb_ci_hardware',
-            parent : { sys_class_name : 'cmdb_ci_hardware' },
-            child.model_id.name : 'MODEL'
-        }
-    }
     */
 
 /**
@@ -58,6 +47,19 @@
             [ 'type' : 'some sysid' ],
             [ "parent.sys_class_name" , 'cmdb_ci_hardware' ],
             [ "child.model_id.name" , 'MODEL ]
+            // addJoinQuery(table2, field , table2field ).addQuery('state','3')
+            [ "field" : {
+                select: table2field,
+                from: table2,
+                where: [
+                    ['state' , 3 ]
+                ]
+                }
+            ]
+            // RLQUERY
+            [ "RLQUERY" : { table: t2,
+                            field: f2
+                              }]
         ]
         orderBy: fieldName,
         orderByDesc: fieldNames
