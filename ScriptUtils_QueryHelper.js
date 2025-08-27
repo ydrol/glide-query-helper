@@ -16,8 +16,19 @@
  *
  * @typedef {[DotWalkFieldName,QueryValue]} WhereEquals
  * @typedef {[DotWalkFieldName,Op,QueryValue]} WhereOp
- * @typedef {(EncodedQueryString|WhereEquals|WhereOp)} WhereClause
- * @typedef {WhereClause[]} WhereList
+ * @typedef {(EncodedQueryString|WhereEquals|WhereOp)} AddQueryArgs
+ * 
+ * structure for user input e.g. { and: listOfConditions }
+ * @typedef {string} BoolOp - and|or|where?
+ * @typedef {Object<BoolOp,ConditionList>} AndOrCondition
+ * @typedef {(AddQueryArgs|AndOrCondition)} Condition
+ * @typedef {Condition[]} ConditionList
+
+ * @typedef {Object} ConditionNodeInternal - { op:'and|or', list: listOfConditions } internal representation of  {and: listOfConditions } - for easier traversal
+ * @typedef {string} ConditionNodeInternal.op - 'and|or'
+ * @typedef {ConditionList} ConditionNodeInternal.list - list of conditions 
+ * @typedef {(GlideRecord|GlideQueryCondition)} ConditionNodeInternal.gTarget - Target GlideObject - either root GlideRecord or GlideQueryCondition
+ * @typedef {(GlideRecord|GlideQueryCondition)} ConditionNodeInternal.gFunction - Function used to add the conditions (addQuery | addCondition | addOrCondition - determined by op and gTarget.
  * 
  * @typedef {Object.<FieldName,FieldValue>} RowResultFieldValues
  *
@@ -30,7 +41,7 @@
  * @typedef {Object} QueryDef 
  * @property {SelectList}           QueryDef.select - if one string return is string[] else RowResultFieldValues[]
  * @property {TableName}            QueryDef.from 
- * @property {WhereList}             QueryDef.where 
+ * @property {ConditionList}             QueryDef.where 
  * @property {integer}              QueryDef.limit 
  * @property {FieldName[]}          QueryDef.orderBy 
     */
@@ -132,7 +143,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
      * @param {object} queryDef 
  * @param {SelectList}           QueryDef.select - if one string return is string[] else RowResultFieldValues[]
  * @param {TableName}            QueryDef.from 
- * @param {WhereList}             QueryDef.where 
+ * @param {ConditionList}             QueryDef.where 
  * @param {integer}              QueryDef.limit 
  * @param {FieldName[]}          QueryDef.orderBy 
  * @returns {string[]|RowResultFieldValues[]} Returns rows - either single vals 
@@ -285,9 +296,9 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
          * It will be validated just before the query is executed
          * as some fields might be DotWalkFieldName
          * @param {GlideRecord} start_gr 
-         * @param {string} where_and_or 
+         * @param {ConditionList} conditionList - list of conditions
          */
-        function applyQuery(start_gr,conditionObj,where_and_or) {
+        function applyQuery(start_gr,conditionList) {
 
             /**
              * 
@@ -295,7 +306,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
              * @param {function} addFunction addQuery or addCondition or addOrCondition
              * @param {object[]} clause one,two or three args passed to addQuery
              */
-            function applyClause(glideRecordOrCondition,addFunction,clause) {
+            function applyClause(parentNode,childNode) {
 
                 if (false && typeof clause === 'string' ) {
                     // Dont alow strings
@@ -311,14 +322,16 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
                         if (clause.length === 2 && Array.isArray(clause[1])) {
 
-                            return addFunction.call(glideRecordOrCondition,clause[0],'IN',clause[1].join());
+                            return parentNode.gFunction.call(parentNode.gTarget,clause[0],'IN',clause[1].join());
 
                         } else {
 
-                            return addFunction.apply(glideRecordOrCondition,clause);
+                            return parentNode.gFunction.apply(parentNode.gTarget,clause);
                         }
                     }
                 } else if (typeof clause === 'object') {
+
+                    let gTarget = ????;
 
                     if (clause.and) {
 
@@ -380,14 +393,18 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
              * @param {*} startGR 
              * @param {*} clauseList 
              */
-            function applyClausesToGR(startGR,clauseList) {
+            function applyClausesToGR(start_gr,conditionNode) {
 
-                for (let clause of clauseList) {
+                conditionNode.gTarget = start_gr;
+                conditionNode.gFunction = start_gr.addQuery;
 
-                    applyClause(startGR,startGR.addQuery,clause);
+                for (let clause of conditionNode.clauses) {
+
+                    applyClause(conditionNode,clause);
 
                 }
             }
+
             function createConditionApplyClauses(parentRecordOrCondition,opKeyword_WhereAndOr,clauseList) {
 
                 // TODO
@@ -407,15 +424,52 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
                 }
                 return firstCondition;
             }
+            /**
+             * 
+             * @param {Object.<string,ConditionList>} conditionObj 
+             */
+            function convertConditionTree(conditionObj) {
 
-            let clauseList = conditionObj[where_and_or];
+                let node = {
+                    op: null , // and|or 
+                    gTarget: null , // GlideRecord | GlideQueryCondition
+                    gFunction:null ,  // addQuery | addCondition | addOrCondition
+                    clauses: []};
+                
+                    let clauses;
+                if (conditionObj.and !== undefined) {
+                    node.op = 'and'
+                    clauses = conditionObj.and;
+                } else if (conditionObj.or !== undefined) {
+                    node.op = 'or' 
+                    clauses = conditionObj.or;
+                };
+                if (typeof clauses == 'string') {
+                    // Single encoded query?
+                    clauses = [ clauses ];
+                }
+                for (let clause of clauses ) {
 
-            if (typeof clauseList === 'string' ) {
-                applyClausesToGR(start_gr,[clauseList]);
-            } else {
-                applyClausesToGR(start_gr,clauseList);
+                    if (typeof clause === 'string' ) {
+                        node.clauses.push( [ clause ]); // single encoded query?
+
+                    } else if (Array.isArray(clause)) {
+                        node.clauses.push( clause ); // Array for addQuery args 
+
+                    }
+
+                }
+
+                return node;
+
             }
+
+            // We'll be tracking GlideQueryCondition inside a copy of the object.
+            let conditionNode = convertConditionTree( { and: conditionList } );
+
+            applyClausesToGR(conditionNode);
         }
+
         /**
          * Call gr.addExtraField() to fetch related columns during the inital select.
          * Then these fields can be access via dot walk after gr.next()
@@ -464,7 +518,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
             }
 
             for(let fInfo of flattenedFields) {
-                addRef(fInfo)
+                addRef(fInfo);
             }
         }
         /**
@@ -537,7 +591,7 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
 
         if (!any_gr.isValid()) throw new Error('unknown table '+queryDef.from);
 
-        applyQuery(any_gr,queryDef,'where');
+        applyQuery(any_gr,queryDef.where );
 
 
         let flattenedSelectFields = flattenSelectList(queryDef.select);
@@ -730,6 +784,15 @@ ScriptUtils_QueryHelper.prototype = /** @lends ScriptUtils_QueryHelper.prototype
   
         // Filter the first array, keeping only items NOT in the second Set.
         return arr1.filter(item => !set2.has(item));
+    },
+
+    /**
+     * Clone an object using JSON - function properties, circular refs not supported!
+     * @param {object} obj 
+     * @returns {object} a copy
+     */
+    _clone: function(obj) {
+        return JSON.parse(JSON.stringify(obj));
     },
 
     type: 'ScriptUtils_QueryHelper'
