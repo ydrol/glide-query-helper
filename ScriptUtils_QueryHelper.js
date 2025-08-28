@@ -1,5 +1,7 @@
 /** ES6+ Script
  * 
+ * Create GlideRecordSafe class - can use GR as a prototype?
+ * 
  * JSDoc generated using jsdoc -d=./docs/ ScriptUtils_QueryHelper.js
 
  * @typedef {string} EncodedQueryString Encoded Query
