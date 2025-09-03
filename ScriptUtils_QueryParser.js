@@ -48,13 +48,41 @@ FUNCTION
         }
         function getToken() {
             skipSpace();
-            if ()
-            
+            let match = stream.match(/^'[^']*'\b/);
+            if (match) {
+                stream = stream.slice(match[0].length);
+                token = { type : 'STRING' , value: match[0].slice(1,-1) };
+            }
+            if (!match) {
+                match = stream.match(/^"[^"]*"\b/);
+                if (match) {
+                    stream = stream.slice(match[0].length);
+                    token = { type : 'STRING' , value: match[0].slice(1,-1) };
+                }
+            }
+            if (!match) {
+                match = stream.match(/^[+-]?[0-9]+(|\.[0-9]+)\b/);
+                if (match) {
+                    stream = stream.slice(match[0].length);
+                    token = { type : 'NUMBER' , value: match[0] };
+                }
+            }
+            if (!match) {
+                match = stream.match(/^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/);
+                if (match) {
+                    stream = stream.slice(match[0].length);
+                    token = { type : 'FIELD' , value: match[0] };
+                }
+            }
+            if (!match) {
+                match = stream.match(/^(AND|OR)\b/);
+                if (match) {
+                    stream = stream.slice(match[0].length);
+                    token = { type : 'OP' , value: match[0] };
+                }
+            }
+            return token;
         } 
-        let exp = pa
-
-
-
     },
     parseSelectExp: function(selectExpression) {
 
