@@ -112,15 +112,34 @@ FUNCTION
     },
 
     TOKEN_TYPES : {
-        FIELD: { label:"FIELD", re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
-        STRING: { label: "STRING",
-        NUMBER: { label: "NUMBER",
-        OP: { label: "QUERYOP",
-        AND: { label: "AND",
-        OR: { label: "OR",
-        LPAR: { label: "(",
-        RPAR: { label: ")",
-        EOF: { label: "<EOF>"
+        FIELD: {
+            label:"FIELD",
+            re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
+        STRING: {
+            label: "STRING",
+            re: /^('[^']*'|"[^"]*")\b/ ,
+        NUMBER: {
+            label: "NUMBER",
+            re: /^[+-]?[0-9]+(|\.[0-9]+)\b/ },
+        OP: {
+            label: "QUERYOP",
+            re: /^(=|!=|>=|<=|IN)\b/ },
+        AND: {
+            label: "AND",
+            re: /^AND\b/ },
+       
+        OR: {
+            label: "OR",
+            re: /^OR\b/ },
+        LPAR: {
+            label: "(",
+            re: /^\(\b/ },
+        RPAR: {
+            label: ")",
+            re: /^\)\b/ },
+        EOF: {
+            label: "<EOF>",
+            re: /^$/ }
     },
     skipSpace: function() {
         let p = this.stream.search(/\S/);
@@ -129,49 +148,27 @@ FUNCTION
         }
     },
     getNextToken: function() {
+
         this.skipSpace();
 
-        let match = this.stream.match(/^'[^']*'\b/);
-        if (match) {
-            this.stream = this.stream.slice(match[0].length);
-            token = { type : this.TOKEN_TYPES.STRING , value: match[0].slice(1,-1) };
-        }
-        if (!match) {
-            match = this.stream.match(/^"[^"]*"\b/);
+        for (t in this.TOKEN_TYPES) {
+
+            let match = this.stream.match(this.TOKEN_TYPES[y].re);
+
             if (match) {
                 this.stream = this.stream.slice(match[0].length);
-                token = { type : this.TOKEN_TYPES.STRING , value: match[0].slice(1,-1) };
+
+                token = { type : t , value: match[0] };
+
+                if (t === this.TOKEN_TYPES.STRING) {
+                    // Remove quotes
+                    token.value = token.value.slice(1,-1);
+                }
+
+                return token;
             }
         }
-        if (!match) {
-            match = this.stream.match(/^[+-]?[0-9]+(|\.[0-9]+)\b/);
-            if (match) {
-                this.stream = this.stream.slice(match[0].length);
-                token = { type : this.TOKEN_TYPES.NUMBER , value: match[0] };
-            }
-        }
-        if (!match) {
-            match = this.stream.match(/^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/);
-            if (match) {
-                this.stream = this.stream.slice(match[0].length);
-                token = { type : this.TOKEN_TYPES.FIELD , value: match[0] };
-            }
-        }
-        if (!match) {
-            match = this.stream.match(/^(AND|OR)\b/);
-            if (match) {
-                this.stream = this.stream.slice(match[0].length);
-                token = { type : this.TOKEN_TYPES.OP , value: match[0] };
-            }
-        }
-        if (!match) {
-            match = this.stream.match(/^$/);
-            if (match) {
-                this.stream = this.stream.slice(match[0].length);
-                token = { type : this.TOKEN_TYPES.EOF , value: null };
-            }
-        }
-        return token;
+        throw new Error(`Unable to parse ${this.stream}`);
     },
 
     type: "ScriptUtils_QueryParser"
