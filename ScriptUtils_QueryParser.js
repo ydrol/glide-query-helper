@@ -47,61 +47,80 @@ FUNCTION
     },
 
     parseExp: function( endTokens ) {
-        let startToken = this.nextToken();
+        let self = this;
         let exp;
         let expStack = [];
         let boolOpStack = [];
-        while (true) {
-            if (startToken.type === this.TOKEN_TYPES.LPAR) {
+        
+        function parseBrackets() {
 
-                let token = this.nextToken();
+            let token = self.getNextToken();
 
-                let newEndTokens =  [ ...endTokens, this.TOKEN_TYPES.RPAR] 
+            let newEndTokens =  [ ...endTokens, this.TOKEN_TYPES.RPAR] 
 
-                exp = this.parseExp(token , newEndTokens );
+            exp = self.parseExp(token , newEndTokens );
 
-                expStack.push(exp);
+            expStack.push(exp);
 
-                token = this.expect([this.TOKEN_TYPES.RPAR]);
+            token = self.expect([this.TOKEN_TYPES.RPAR]);
+        }
 
-            } else {
+        function parseAnd() {
+            let expList = [ parseSimple() ];
 
-                let field = this.expect( [this.TOKEN_TYPES.FIELD]);
-                let op = this.expect( [this.TOKEN_TYPES.OP]);
-                let val = this.expect( [this.TOKEN_TYPES.STRING,this.TOKEN_TYPES.NUMBER]);
-
-                exp = {
-                    field: field,
-                    op: op,
-                    val: val
-                }
+            if (self.peekToken()) {
             }
-            let token = this.expect([this.TOKEN_TYPES.AND, this.TOKEN_TYPES.OR,this.TOKEN_TYPES.EOF]);
-            if (token.type === this.TOKEN_TYPES.EOF) {
+
+        }
+
+        function parseOR() {
+
+        }
+        function parseSimple() {
+
+            let field = self.expect( [self.TOKEN_TYPES.FIELD]);
+            let op = self.expect( [self.TOKEN_TYPES.OP]);
+            let val = self.expect( [self.TOKEN_TYPES.STRING,self.TOKEN_TYPES.NUMBER]);
+
+            exp = {
+                field: field,
+                op: op,
+                val: val
+            }
+            return exp;
+        }
+
+        let nextToken = this.getNextToken();
+
+        if (startToken.type === self.TOKEN_TYPES.LPAR) {
+
+            exp = parseBrackets();
+
+        } else {
+
+            exp = parseAND();
+
+                }
+            let token = self.expect([self.TOKEN_TYPES.AND, self.TOKEN_TYPES.OR,self.TOKEN_TYPES.EOF]);
+            if (token.type === self.TOKEN_TYPES.EOF) {
                 break;
             }
 
             
 
 
-        }
-    },
-
-    precedence: function(token) {
-        if (token.type === this.TOKEN_TYPES)
-
     },
 
     TOKEN_TYPES : {
-        FIELD: "FIELD",
-        STRING: "STRING",
-        NUMBER: "NUMBER",
-        OP: "QUERYOP",
-        AND: "AND",
-        OR: "OR",
-        LPAR: "(",
-        RPAR: ")",
-        EOF: "<EOF>"
+        FIELD: { label:"FIELD", re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
+        STRING: { label: "STRING",
+        NUMBER: { label: "NUMBER",
+        OP: { label: "QUERYOP",
+        AND: { label: "AND",
+        OR: { label: "OR",
+        LPAR: { label: "(",
+        RPAR: { label: ")",
+        EOF: { label: "<EOF>"
     },
     skipSpace: function() {
         let p = this.stream.search(/\S/);
@@ -109,8 +128,9 @@ FUNCTION
             this.stream = this.stream.slice(p);
         }
     },
-    nextToken: function() {
+    getNextToken: function() {
         this.skipSpace();
+
         let match = this.stream.match(/^'[^']*'\b/);
         if (match) {
             this.stream = this.stream.slice(match[0].length);
@@ -148,7 +168,7 @@ FUNCTION
             match = this.stream.match(/^$/);
             if (match) {
                 this.stream = this.stream.slice(match[0].length);
-                token = { type : this.TOKEN_TYPES.EOF , value: null
+                token = { type : this.TOKEN_TYPES.EOF , value: null };
             }
         }
         return token;
