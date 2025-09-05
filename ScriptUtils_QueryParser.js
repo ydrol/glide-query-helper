@@ -69,16 +69,16 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
         this.getNextToken();
 
-        const expTree =  this.parseAND();
+        let expTree =  this.parseAND();
         
         if (this.currentToken.type !== this.TOKEN_TYPES.EOL) {
             throw new Error(`Stopped at <<${this.stream}>>`);
         }
+        expTree = this.insertRootAND(expTree);
         gs.info(this.nodeStr(expTree));
 
         gs.info(JSON.stringify(expTree,null,4));
 
-        this.insertConditionNoops(expTree);
     },
     /**
      * start with this.currentToken set
@@ -130,7 +130,14 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         }
         return node;
     },
-    newNodeBool: function(opToken,childNodes) {
+    /**
+     * 
+     * @param {*} opToken  - AND or OR token
+     * @param {*} childNodes - list of child nodes to be added
+     * @param {boolean} allowSingleChild - for top level AND node (that maps to gr.addQuery() ) we want to allow a single child. 
+     * @returns 
+     */
+    newNodeBool: function(opToken,childNodes,allowSingleChild) {
 
         // Add a child node - (if the child node is the same operator then merge it with parent)
         // (ie a AND b AND c ) = a AND ( b AND c) = 
@@ -139,6 +146,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             // (same with "OR")
             if (child.opToken.type === node.opToken.type) {
                 // copy grand-children up and ignore the child
+                gs.info('GRANDCHILD ADOPT ')
                 node.childNodes.push(...child.childNodes);
             } else {
                 // just add the child
@@ -152,7 +160,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             valToken: null,
             childNodes: []
         }
-        if (childNodes.length === 1) {
+        if (!allowSingleChild && childNodes.length === 1) {
             return childNodes[0];
         } else {
             for(let child of childNodes) {
@@ -217,14 +225,14 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     },
 
     tokenStr: function(token) {
-        return `${this.tokenTypeStr(token.type)}:<${token.value}>`;
+        return `${this.tokenTypeStr(token.type)}:"${token.value}"`;
     },
 
     nodeStr: function(node) {
         if (node.childNodes) {
-            return `${this.tokenStr(node.opToken)}(${node.childNodes.map(self.nodeStr)})`;
+            return `${this.tokenStr(node.opToken)}(${node.childNodes.map(this.nodeStr,this)})`;
         } else {
-            return `${this.tokenStr(node.fieldToken)} ${this.tokenStr(node.opToken)} ${this.tokenStr(node.valToken)} }`;
+            return `${this.tokenStr(node.fieldToken)} ${this.tokenStr(node.opToken)} ${this.tokenStr(node.valToken)} `;
         }
     },
 
@@ -255,7 +263,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
                 gs.info(`Match <<${this.stream}>> with <<${JSON.stringify(typeObj)}>> = ${JSON.stringify(match)}`);
                 this.stream = this.stream.slice(match[0].length);
 
-                token = { type : typeObj , value: match[0] };
+                token = this.newToken(typeObj , match[0] );
 
                 if (typeObj === this.TOKEN_TYPES.STRING) {
                     // Remove quotes
@@ -267,6 +275,18 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             }
         }
         throw new Error(`Unable to parse <<${this.stream}>>`);
+    },
+
+    newToken: function(typeObj,value) {
+        return { type: typeObj , value: value };
+    },
+
+    newTokenAND: function() {
+        return this.newToken(this.TOKEN_TYPES.AND, "*AND*");
+    },
+
+    newTokenOR: function() {
+        return this.newToken(this.TOKEN_TYPES.OR, "*OR*");
     },
 
     /**
@@ -288,12 +308,18 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      * 
      * @param {*} expTree 
      */
-    insertConditionNoops: function(expTree) {
+    insertRootAND: function(expTree) {
 
-        if (expTree.type === this.TOKEN_TYPES.OR ) {
+        let newTree = expTree;
 
+        if (expTree.opToken.type !== this.TOKEN_TYPES.AND ) {
 
+            gs.info('ADDING');
+            //// Add the child explicitly otherwise the code will reduce an AND node with only one child to be just the child.
+            newTree = this.newNodeBool(this.newTokenAND(),[expTree],true);
+            gs.info(this.nodeStr(newTree));
         }
+        return newTree;
 
     },
 
