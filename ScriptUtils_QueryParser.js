@@ -18,7 +18,7 @@ ScriptUtils_QueryParser.prototype = /** @lends ScriptUtils_QueryParser.prototype
         OR:     { label: "OR",      re: /^OR\b/ },
         LPAR:   { label: "_(_",     re: /^\(/ },
         RPAR:   { label: "_)_",     re: /^\)/ },
-        EOF:    { label: "_EOF_",   re: /^$/ }
+        EOL:    { label: "_EOL_",   re: /^$/ }
     },
 
     /*
@@ -48,6 +48,7 @@ FUNCTION
 ( FIELD OP VALUE  )
 
 
+new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
 
     */
@@ -69,6 +70,12 @@ FUNCTION
         this.getNextToken();
 
         const expTree =  this.parseAND();
+        
+        if (this.currentToken.type !== this.TOKEN_TYPES.EOL) {
+            throw new Error(`Stopped at <<${this.stream}>>`);
+        }
+        gs.info(this.nodeStr(expTree));
+
         gs.info(JSON.stringify(expTree,null,4));
 
         this.insertConditionNoops(expTree);
@@ -88,46 +95,72 @@ FUNCTION
 
     parseANDOR: function(tokenType,nextParser) {
         
-        // Add a child node - (if the child node is the same operator then merge it with parent)
-        // (ie a AND b AND c ) = a AND ( b AND c) = 
-        function addNode(node,child) {
-            // If AND node has AND child move grandchildren up (flatten the tree)
-            // (same with "OR")
-            if (child.operator === node.operator) {
-                // copy grand-children up
-                node.children.push(...child.children);
-            } else {
-                // just add the child
-                node.children.push(child);
-            }
-        }
 
-        let node = {
-            operator: null,
-            children: []
-        };
+        let expressions = [];
+
+        let opToken;
 
         let subexp = nextParser.call(this);
-        addNode(node,subexp);
+        expressions.push(subexp);
+
+        opToken = this.currentToken;
 
         while (this.currentToken.type === tokenType) {
 
             this.getNextToken();
 
-            node.operator = tokenType;
-
             subexp = nextParser.call(this);
-            addNode(node,subexp);
+            expressions.push(subexp);
         }
 
-        if (node.children.length === 1) {
-            return node.children[0];
+        if (expressions.length === 1) {
+            return expressions[0];
         } else {
-
-            return node;
+            return this.newNodeBool(opToken , expressions );
         }
     },
 
+    newNodeLeaf: function(fieldToken,opToken,valToken) {
+
+        const node = {
+            fieldToken: fieldToken,
+            opToken : opToken,
+            valToken: valToken,
+            children: null
+        }
+        return node;
+    },
+    newNodeBool: function(opToken,childNodes) {
+
+        // Add a child node - (if the child node is the same operator then merge it with parent)
+        // (ie a AND b AND c ) = a AND ( b AND c) = 
+        function addNode(node,child) {
+            // If AND node has AND child move grandchildren up (flatten the tree)
+            // (same with "OR")
+            if (child.opToken.type === node.opToken.type) {
+                // copy grand-children up and ignore the child
+                node.childNodes.push(...child.childNodes);
+            } else {
+                // just add the child
+                node.childNodes.push(child);
+            }
+        }
+
+        const node = {
+            opToken : opToken,
+            fieldToken: null,
+            valToken: null,
+            childNodes: []
+        }
+        if (childNodes.length === 1) {
+            return childNodes[0];
+        } else {
+            for(let child of childNodes) {
+                addNode(node,child);
+            }
+            return node;
+        }
+    },
 
     /**
      * start with this.currentToken set
@@ -146,29 +179,30 @@ FUNCTION
 
             this.expect([this.TOKEN_TYPES.RPAR]);
 
+            this.getNextToken();
+
+            return node;
+
         } else if (this.currentToken.type === this.TOKEN_TYPES.FIELD) {
 
-            node = {
-                field: this.currentToken,
-                operator : null,
-                value: null,
-                children: null
-            };
+            let fieldToken = this.currentToken;
 
             this.getNextToken();
 
-            node.operator = this.expect( [this.TOKEN_TYPES.OP]);
+            let opToken = this.expect( [this.TOKEN_TYPES.OP]);
 
             this.getNextToken();
 
-            node.value = this.expect( [
+            let valToken = this.expect( [
                 this.TOKEN_TYPES.STRING
                 ,this.TOKEN_TYPES.NUMBER
             ]);
 
+            this.getNextToken();
+
+            return this.newNodeLeaf(fieldToken,opToken,valToken);
+
         }
-        this.getNextToken();
-        return node;
     },
 
     skipSpace: function() {
@@ -186,11 +220,20 @@ FUNCTION
         return `${this.tokenTypeStr(token.type)}:<${token.value}>`;
     },
 
+    nodeStr: function(node) {
+        if (node.childNodes) {
+            return `${this.tokenStr(node.opToken)}(${node.childNodes.map(self.nodeStr)})`;
+        } else {
+            return `${this.tokenStr(node.fieldToken)} ${this.tokenStr(node.opToken)} ${this.tokenStr(node.valToken)} }`;
+        }
+    },
+
     expect: function(allowedTypes) {
 
         if (allowedTypes.includes(this.currentToken.type)) {
             return this.currentToken;
         }
+
         let types = allowedTypes.map(function(t) { return t.label;} );
 
         throw new Error(
@@ -246,6 +289,11 @@ FUNCTION
      * @param {*} expTree 
      */
     insertConditionNoops: function(expTree) {
+
+        if (expTree.type === this.TOKEN_TYPES.OR ) {
+
+
+        }
 
     },
 
