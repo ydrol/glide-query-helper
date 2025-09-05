@@ -1,8 +1,68 @@
 //ES6+
 
+/*
+var qp = new ScriptUtils_QueryParser();
+qp.parseQueryExp('a = 1 AND b = 2 OR c = 3');
+
+*** Script: Match <<a = 1 AND b = 2 OR c = 3>> with <<{"label":"FIELD","re":{}}>> = ["a",""]
+*** Script: Match <<= 1 AND b = 2 OR c = 3>> with <<{"label":"QUERYOP","re":{}}>> = ["=","="]
+*** Script: Match <<1 AND b = 2 OR c = 3>> with <<{"label":"NUMBER","re":{}}>> = ["1",""]
+*** Script: Match <<AND b = 2 OR c = 3>> with <<{"label":"AND","re":{}}>> = ["AND"]
+*** Script: Match <<b = 2 OR c = 3>> with <<{"label":"FIELD","re":{}}>> = ["b",""]
+*** Script: Match <<= 2 OR c = 3>> with <<{"label":"QUERYOP","re":{}}>> = ["=","="]
+*** Script: Match <<2 OR c = 3>> with <<{"label":"NUMBER","re":{}}>> = ["2",""]
+*** Script: Match <<OR c = 3>> with <<{"label":"OR","re":{}}>> = ["OR"]
+*** Script: Match <<c = 3>> with <<{"label":"FIELD","re":{}}>> = ["c",""]
+*** Script: Match <<= 3>> with <<{"label":"QUERYOP","re":{}}>> = ["=","="]
+*** Script: Match <<3>> with <<{"label":"NUMBER","re":{}}>> = ["3",""]
+*** Script: Match <<>> with <<{"label":"_EOF_","re":{}}>> = [""]
+*** Script:
+    {
+    "operator": { "type": { "label": "FIELD", "re": {} }, "value": "b" },
+    "children": [
+        {
+            "field": { "type": { "label": "FIELD", "re": {} }, "value": "a" },
+            "operator": { "type": { "label": "QUERYOP", "re": {} }, "value": "=" },
+            "value": { "type": { "label": "NUMBER", "re": {} }, "value": "1" },
+            "children": null
+        },
+        {
+            "operator": { "type": { "label": "FIELD", "re": {} }, "value": "c" },
+            "children": [
+                {
+                    "field": { "type": { "label": "FIELD", "re": {} }, "value": "b" },
+                    "operator": { "type": { "label": "QUERYOP", "re": {} }, "value": "=" },
+                    "value": { "type": { "label": "NUMBER", "re": {} }, "value": "2" },
+                    "children": null
+                },
+                {
+                    "field": { "type": { "label": "FIELD", "re": {} }, "value": "c" },
+                    "operator": { "type": { "label": "QUERYOP", "re": {} }, "value": "=" },
+                    "value": { "type": { "label": "NUMBER", "re": {} }, "value": "3" },
+                    "children": null
+                }
+            ]
+        }
+    ]
+}
+    */
+
 var ScriptUtils_QueryParser = Class.create();
 ScriptUtils_QueryParser.prototype = /** @lends ScriptUtils_QueryParser.prototype */ {
     initialize: function() {
+    },
+
+    // regex to parse a token
+    TOKEN_TYPES : {
+        FIELD:  { label: "FIELD",   re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
+        STRING: { label: "STRING",  re: /^('[^']*'|"[^"]*")/ } ,
+        NUMBER: { label: "NUMBER",  re: /^[+-]?[0-9]+(|\.[0-9]+)/ },
+        OP:     { label: "QUERYOP", re: /^(=|!=|>=|<=|IN\b)/ },
+        AND:    { label: "AND",     re: /^AND\b/ },
+        OR:     { label: "OR",      re: /^OR\b/ },
+        LPAR:   { label: "_(_",     re: /^\(/ },
+        RPAR:   { label: "_)_",     re: /^\)/ },
+        EOF:    { label: "_EOF_",   re: /^$/ }
     },
 
     /*
@@ -35,140 +95,179 @@ FUNCTION
 
 
     */
-    parseQueryExp: function(queryExpression,start,end) {
+    parseQueryExp: function(queryExpression) {
 
         this.stream = queryExpression;
         this.streamPos = 0;
 
+/*
+    // In ServiceNow(unlike SQL) AND has lower precedence to OR
+    // so OR is *completed* first (via recursion)
 
-        return this.parseExp( new Set([ this.TOKEN_TYPES.EOF ]));
+        ANDExpression => ORExpression ( AND ORExpression )
+        ORExpression  => SIMPLE ( OR SIMPLE )
+        SIMPLE => FIELD-OP-VALUE | ( AndExpression )
 
+*/
+
+        this.getNextToken();
+
+        const exp =  this.parseAND();
+        gs.info(JSON.stringify(exp,null,4));
 
     },
+    /**
+     * start with this.currentToken set
+     * end with currentToken at the next token
+     * @returns {Node}
+     * 
+     * TODO
+     * 
+     * 
+     */
+    parseAND: function() {
+        return this.parseANDOR(this.TOKEN_TYPES.AND,this.parseOR);
+    },
+    parseOR: function() {
+        return this.parseANDOR(this.TOKEN_TYPES.OR,this.parseSIMPLE);
+    },
 
-    parseExp: function( endTokens ) {
-        let self = this;
-        let exp;
-        let expStack = [];
-        let boolOpStack = [];
+    parseANDOR: function(tokenType,nextParser) {
         
-        function parseBrackets() {
-
-            let token = self.getNextToken();
-
-            let newEndTokens =  [ ...endTokens, this.TOKEN_TYPES.RPAR] 
-
-            exp = self.parseExp(token , newEndTokens );
-
-            expStack.push(exp);
-
-            token = self.expect([this.TOKEN_TYPES.RPAR]);
-        }
-
-        function parseAnd() {
-            let expList = [ parseSimple() ];
-
-            if (self.peekToken()) {
+        function addNode(node,child) {
+            // If AND node has AND child move grandchildren up (flatten the tree)
+            // (same with "OR")
+            if (child.operator === node.operator) {
+                // copy grand-children up
+                node.children.push(...child.children);
+            } else {
+                // just add the child
+                node.children.push(child);
             }
-
         }
 
-        function parseOR() {
+        let node = {
+            operator: null,
+            children: []
+        };
 
+        let subexp = nextParser.call(this);
+        addNode(node,subexp);
+
+        while (this.currentToken.type === tokenType) {
+
+            this.getNextToken();
+
+            node.operator = tokenType;
+
+            subexp = nextParser.call(this);
+            addNode(node,subexp);
         }
-        function parseSimple() {
 
-            let field = self.expect( [self.TOKEN_TYPES.FIELD]);
-            let op = self.expect( [self.TOKEN_TYPES.OP]);
-            let val = self.expect( [self.TOKEN_TYPES.STRING,self.TOKEN_TYPES.NUMBER]);
-
-            exp = {
-                field: field,
-                op: op,
-                val: val
-            }
-            return exp;
-        }
-
-        let nextToken = this.getNextToken();
-
-        if (startToken.type === self.TOKEN_TYPES.LPAR) {
-
-            exp = parseBrackets();
-
+        if (node.children.length === 1) {
+            return node.children[0];
         } else {
 
-            exp = parseAND();
-
-                }
-            let token = self.expect([self.TOKEN_TYPES.AND, self.TOKEN_TYPES.OR,self.TOKEN_TYPES.EOF]);
-            if (token.type === self.TOKEN_TYPES.EOF) {
-                break;
-            }
-
-            
-
-
+            return node;
+        }
     },
 
-    TOKEN_TYPES : {
-        FIELD: {
-            label:"FIELD",
-            re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
-        STRING: {
-            label: "STRING",
-            re: /^('[^']*'|"[^"]*")\b/ ,
-        NUMBER: {
-            label: "NUMBER",
-            re: /^[+-]?[0-9]+(|\.[0-9]+)\b/ },
-        OP: {
-            label: "QUERYOP",
-            re: /^(=|!=|>=|<=|IN)\b/ },
-        AND: {
-            label: "AND",
-            re: /^AND\b/ },
-       
-        OR: {
-            label: "OR",
-            re: /^OR\b/ },
-        LPAR: {
-            label: "(",
-            re: /^\(\b/ },
-        RPAR: {
-            label: ")",
-            re: /^\)\b/ },
-        EOF: {
-            label: "<EOF>",
-            re: /^$/ }
+
+    /**
+     * start with this.currentToken set
+     * end with currentToken at the next token
+     * @returns {Node}
+     */
+    parseSIMPLE: function () {
+
+        let node;
+
+        if (this.currentToken.type === this.TOKEN_TYPES.LPAR) {
+
+            this.getNextToken();
+
+            node = this.parseAND();
+
+            this.expect([this.TOKEN_TYPES.RPAR]);
+
+        } else if (this.currentToken.type === this.TOKEN_TYPES.FIELD) {
+
+            node = {
+                field: this.currentToken,
+                operator : null,
+                value: null,
+                children: null
+            };
+
+            this.getNextToken();
+
+            node.operator = this.expect( [this.TOKEN_TYPES.OP]);
+
+            this.getNextToken();
+
+            node.value = this.expect( [
+                this.TOKEN_TYPES.STRING
+                ,this.TOKEN_TYPES.NUMBER
+            ]);
+
+        }
+        this.getNextToken();
+        return node;
     },
+
     skipSpace: function() {
         let p = this.stream.search(/\S/);
         if (p) {
             this.stream = this.stream.slice(p);
         }
     },
+
+    tokenTypeStr: function(tokenType) {
+        return `<${tokenType.label}>`;
+    },
+
+    tokenStr: function(token) {
+        return `${this.tokenTypeStr(token.type)}:<${token.value}>`;
+    },
+
+    expect: function(allowedTypes) {
+
+        if (allowedTypes.includes(this.currentToken.type)) {
+            return this.currentToken;
+        }
+        let types = allowedTypes.map(function(t) { return t.label;} );
+
+        throw new Error(
+            `unexpected token ${this.tokenStr(this.currentToken)}: expected : ${types}`);
+    },
+
     getNextToken: function() {
 
         this.skipSpace();
 
-        for (t in this.TOKEN_TYPES) {
+        for (typeName in this.TOKEN_TYPES) {
 
-            let match = this.stream.match(this.TOKEN_TYPES[y].re);
+            let typeObj = this.TOKEN_TYPES[typeName];
 
-            if (match) {
+            let match = this.stream.match(typeObj.re);
+
+
+            if (match !== null) {
+                gs.info(`Match <<${this.stream}>> with <<${JSON.stringify(typeObj)}>> = ${JSON.stringify(match)}`);
                 this.stream = this.stream.slice(match[0].length);
 
-                token = { type : t , value: match[0] };
+                token = { type : typeObj , value: match[0] };
 
-                if (t === this.TOKEN_TYPES.STRING) {
+                if (typeObj === this.TOKEN_TYPES.STRING) {
                     // Remove quotes
                     token.value = token.value.slice(1,-1);
                 }
 
+                this.currentToken = token;
                 return token;
             }
         }
-        throw new Error(`Unable to parse ${this.stream}`);
+        throw new Error(`Unable to parse <<${this.stream}>>`);
     },
 
     type: "ScriptUtils_QueryParser"
