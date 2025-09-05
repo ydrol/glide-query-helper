@@ -1,50 +1,6 @@
 //ES6+
 
 /*
-var qp = new ScriptUtils_QueryParser();
-qp.parseQueryExp('a = 1 AND b = 2 OR c = 3');
-
-*** Script: Match <<a = 1 AND b = 2 OR c = 3>> with <<{"label":"FIELD","re":{}}>> = ["a",""]
-*** Script: Match <<= 1 AND b = 2 OR c = 3>> with <<{"label":"QUERYOP","re":{}}>> = ["=","="]
-*** Script: Match <<1 AND b = 2 OR c = 3>> with <<{"label":"NUMBER","re":{}}>> = ["1",""]
-*** Script: Match <<AND b = 2 OR c = 3>> with <<{"label":"AND","re":{}}>> = ["AND"]
-*** Script: Match <<b = 2 OR c = 3>> with <<{"label":"FIELD","re":{}}>> = ["b",""]
-*** Script: Match <<= 2 OR c = 3>> with <<{"label":"QUERYOP","re":{}}>> = ["=","="]
-*** Script: Match <<2 OR c = 3>> with <<{"label":"NUMBER","re":{}}>> = ["2",""]
-*** Script: Match <<OR c = 3>> with <<{"label":"OR","re":{}}>> = ["OR"]
-*** Script: Match <<c = 3>> with <<{"label":"FIELD","re":{}}>> = ["c",""]
-*** Script: Match <<= 3>> with <<{"label":"QUERYOP","re":{}}>> = ["=","="]
-*** Script: Match <<3>> with <<{"label":"NUMBER","re":{}}>> = ["3",""]
-*** Script: Match <<>> with <<{"label":"_EOF_","re":{}}>> = [""]
-*** Script:
-    {
-    "operator": { "type": { "label": "FIELD", "re": {} }, "value": "b" },
-    "children": [
-        {
-            "field": { "type": { "label": "FIELD", "re": {} }, "value": "a" },
-            "operator": { "type": { "label": "QUERYOP", "re": {} }, "value": "=" },
-            "value": { "type": { "label": "NUMBER", "re": {} }, "value": "1" },
-            "children": null
-        },
-        {
-            "operator": { "type": { "label": "FIELD", "re": {} }, "value": "c" },
-            "children": [
-                {
-                    "field": { "type": { "label": "FIELD", "re": {} }, "value": "b" },
-                    "operator": { "type": { "label": "QUERYOP", "re": {} }, "value": "=" },
-                    "value": { "type": { "label": "NUMBER", "re": {} }, "value": "2" },
-                    "children": null
-                },
-                {
-                    "field": { "type": { "label": "FIELD", "re": {} }, "value": "c" },
-                    "operator": { "type": { "label": "QUERYOP", "re": {} }, "value": "=" },
-                    "value": { "type": { "label": "NUMBER", "re": {} }, "value": "3" },
-                    "children": null
-                }
-            ]
-        }
-    ]
-}
     */
 
 var ScriptUtils_QueryParser = Class.create();
@@ -112,17 +68,15 @@ FUNCTION
 
         this.getNextToken();
 
-        const exp =  this.parseAND();
-        gs.info(JSON.stringify(exp,null,4));
+        const expTree =  this.parseAND();
+        gs.info(JSON.stringify(expTree,null,4));
 
+        this.insertConditionNoops(expTree);
     },
     /**
      * start with this.currentToken set
      * end with currentToken at the next token
      * @returns {Node}
-     * 
-     * TODO
-     * 
      * 
      */
     parseAND: function() {
@@ -134,6 +88,8 @@ FUNCTION
 
     parseANDOR: function(tokenType,nextParser) {
         
+        // Add a child node - (if the child node is the same operator then merge it with parent)
+        // (ie a AND b AND c ) = a AND ( b AND c) = 
         function addNode(node,child) {
             // If AND node has AND child move grandchildren up (flatten the tree)
             // (same with "OR")
@@ -268,6 +224,29 @@ FUNCTION
             }
         }
         throw new Error(`Unable to parse <<${this.stream}>>`);
+    },
+
+    /**
+     * Glide AND/OR operations have the following limitations:
+     * 1.  can one add simple clauses at a time. 
+     * 2. Top level operation is AND.
+     * 
+     * As a result any subtree that does not have a "simple" node cannot be directly 
+     * represented without modification.
+     * 
+     * 
+     * eg.  (A AND B) OR (C AND D)
+     * 
+     * The solution is to introduce fake "simple nodes" we can use to anchor other nodes
+     * to but that do not change the result of the calculation and are optimized away by MariaDB query optimizer.
+     *  use redundant OP similar to 1=1 in SQL. and hope that
+     *  the database Squery optimizer removes/ignores them.
+     * 
+     * 
+     * @param {*} expTree 
+     */
+    insertConditionNoops: function(expTree) {
+
     },
 
     type: "ScriptUtils_QueryParser"
