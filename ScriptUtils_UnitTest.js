@@ -115,7 +115,7 @@ ScriptUtils_UnitTest.prototype = /** @lends ScriptUtils_UnitTest.prototype */ {
                             self._logInfo('   PASSED   :{0} {1} - << .1. >>',
                                 testGroupName,testName,serialize(result));
                         } else {
-                            self._logWarn('***FAILED***:{0} {1} expected <{2}> got <{3}>\n\n',
+                            self._logWarn('***FAILED***:{0} {1}\n\texpected:<{2}>\n\t     got:<{3}>\n\n',
                                 testGroupName,testName,serialize(expect),serialize(result));
                         }
                     }
