@@ -408,10 +408,24 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             expTree.childNodes = newChildList;
         
             if (expTree.childNodes.length  == 1) {
-                // TODO 
-                copy child into current
+                self.copyNodeOver(expTree,expTree.childNodes[0]);
             }
         }
+    },
+
+    copyNodeOver: function(target,source) {
+
+        function clearObject(obj) {
+
+            for (let p in obj) {
+                if (Object.hasOwnProperty.call(obj,p)) {
+                    delete obj[p];
+                }
+            }
+        }
+
+        clearObject(target);
+        Object.assign(target,source);
     },
 
     filterNodesByQueryOp: function(nodes, opTokenValue ) {
