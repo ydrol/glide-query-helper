@@ -175,7 +175,7 @@ ScriptUtils_UnitTest.prototype = /** @lends ScriptUtils_UnitTest.prototype */ {
 
         const methods = getMethods(instanceToTest);
 
-        self._logInfo(`Methods ${methods.sort().join('\n')}`);
+        //self._logInfo(`Methods ${methods.sort().join('\n')}`);
 
         for (let methodName of methods) {
 

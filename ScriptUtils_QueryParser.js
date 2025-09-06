@@ -45,32 +45,48 @@ WHERE task0.`sys_id` != task0.`sys_id`
 var ScriptUtils_QueryParser = Class.create();
 ScriptUtils_QueryParser.prototype = /** @lends ScriptUtils_QueryParser.prototype */ {
     initialize: function() {
-    },
+        // regex to parse a token
+        const tt = this.TOKEN_TYPES = {
+            FIELD:  { txt:'F:' },
+            STRING: { txt:'$:'} ,
+            NUMBER: { txt:'#:'},
+            QUERYOP:{ txt:'op:'},
+            BOOLOP: { txt:'&|:'},
+            PAR:   { txt:'():'},
+            EOL:    { txt:'.'}
+        };
 
-    // regex to parse a token
-    TOKEN_TYPES : {
-        FIELD:  { label: "FIELD",   prefix:'F:', re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
-        STRING: { label: "STRING",  prefix:'$:', re: /^('[^']*'|"[^"]*")/ } ,
-        NUMBER: { label: "NUMBER",  prefix:'#:', re: /^[+-]?[0-9]+(|\.[0-9]+)/ },
-        QUERYOP:{ label: "QUERYOP", prefix:'?:', re: /^(=|!=|>=|<=|<|>|IN\b|LIKE\b)/ },
-        QUERYFIELDOP:
-                { label: "QUERYFIELD", prefix:'?:', re: /^(N?SAMEAS|[GL]T_(|OR_EQUALS_)FIELD)\b/ },
+        this.TOKENS = {
+            FIELD:  { type: tt.FIELD,   txt:'F:', re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
+            STRING: { type: tt.STRING,  txt:'$:', re: /^('[^']*'|"[^"]*")/ } ,
+            NUMBER: { type: tt.NUMBER,  txt:'#:', re: /^[+-]?[0-9]+(|\.[0-9]+)/ },
+            EQ:     { type: tt.QUERYOP, txt:'?:', re: /^(=|SAMEAS\b)/ },
+            NE:     { type: tt.QUERYOP, txt:'?:', re: /^(!=|<>|NSAMEAS\b)/ },
+            LT:     { type: tt.QUERYOP, txt:'<:', re: /^(<(?![>=])|LT_FIELD\b)/ },
+            GT:     { type: tt.QUERYOP, txt:'>:', re: /^(>(?!=)|GT_FIELD\b)/ },
+            LE:     { type: tt.QUERYOP, txt:'<=:', re: /^(<=|LT_OR_EQUALS_FIELD\b)/ },
+            GE:     { type: tt.QUERYOP, txt:'>=:', re: /^(>=|GT_OR_EQUALS_FIELD\b)/ },
+            LIKE:   { type: tt.QUERYOP, txt:'LIKE:', re: /^LIKE\b/ },
+            BETWEEN:{ type: tt.QUERYOP, txt:'BETWEEN:', re: /^BETWEEN\b/ },
+            IN:     { type: tt.QUERYOP, txt:'IN:', re: /^IN\b/ },
+            NOTIN:  { type: tt.QUERYOP, txt:'!IN:', re: /^NOT IN\b/ },
+            AND:    { type: tt.QUERYOP, txt:'&:', re: /^AND\b/ },
+            OR:     { type: tt.QUERYOP, txt:'|:', re: /^OR\b/ },
+            LPAR:   { type: tt.PAR, txt:'():', re: /^\(/ },
+            RPAR:   { type: tt.PAR, txt:'):',  re: /^\)/ },
+            EOL:    { type: tt.EOL, txt:'.',   re: /^$/ }
 
-/*
-=	ANYTHING	GT_FIELD	NOT IN
-!=	BETWEEN	GT_OR_EQUALS_FIELD	NOT LIKE
->	CONTAINS	IN	NSAMEAS
->=	DOES NOT CONTAIN	INSTANCEOF	ON
-<	DYNAMIC	LIKE	SAMEAS
-<=	EMPTYSTRING	LT_FIELD	STARTSWITH
-ENDSWITH	LT_OR_EQUALS_FIELD	
-*/
+    /*
+    =	ANYTHING	GT_FIELD	NOT IN
+    !=	BETWEEN	GT_OR_EQUALS_FIELD	NOT LIKE
+    >	CONTAINS	IN	NSAMEAS
+    >=	DOES NOT CONTAIN	INSTANCEOF	ON
+    <	DYNAMIC	LIKE	SAMEAS
+    <=	EMPTYSTRING	LT_FIELD	STARTSWITH
+    ENDSWITH	LT_OR_EQUALS_FIELD	
+    */
 
-        AND:    { label: "AND",     prefix:'&:', re: /^AND\b/ },
-        OR:     { label: "OR",      prefix:'|:', re: /^OR\b/ },
-        LPAR:   { label: "_(_",     prefix:'(:', re: /^\(/ },
-        RPAR:   { label: "_)_",     prefix:'):', re: /^\)/ },
-        EOL:    { label: "_EOL_",   prefix:'.', re: /^$/ }
+        };
     },
 
     /*
@@ -119,11 +135,11 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
 */
 
-        this.getNextToken();
+        this.getNextTokenValue();
 
         let expTree =  this.parseAND();
         
-        if (this.currentToken.type !== this.TOKEN_TYPES.EOL) {
+        if (this.currentTokenValue.token !== this.TOKENS.EOL) {
             throw new Error(`Stopped at <<${this.stream}>>`);
         }
         expTree = this.insertRootAND(expTree);
@@ -134,16 +150,16 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
     },
     /**
-     * start with this.currentToken set
-     * end with currentToken at the next token
+     * start with this.currentTokenValue set
+     * end with currentTokenValue at the next token
      * @returns {Node}
      * 
      */
     parseAND: function() {
-        return this.parseANDOR(this.TOKEN_TYPES.AND,this.parseOR);
+        return this.parseANDOR(this.TOKENS.AND,this.parseOR);
     },
     parseOR: function() {
-        return this.parseANDOR(this.TOKEN_TYPES.OR,this.parseSIMPLE);
+        return this.parseANDOR(this.TOKENS.OR,this.parseSIMPLE);
     },
 
     parseANDOR: function(tokenType,nextParser) {
@@ -151,16 +167,16 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
         let expressions = [];
 
-        let opToken;
+        let opValue;
 
         let subexp = nextParser.call(this);
         expressions.push(subexp);
 
-        opToken = this.currentToken;
+        opValue = this.currentTokenValue;
 
-        while (this.currentToken.type === tokenType) {
+        while (this.currentTokenValue.token === tokenType) {
 
-            this.getNextToken();
+            this.getNextTokenValue();
 
             subexp = nextParser.call(this);
             expressions.push(subexp);
@@ -169,35 +185,35 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         if (expressions.length === 1) {
             return expressions[0];
         } else {
-            return this.newNodeBool(opToken , expressions );
+            return this.newNodeBool(opValue , expressions );
         }
     },
 
-    newNodeLeaf: function(fieldToken,opToken,valToken) {
+    newNodeLeaf: function(fieldValue,opValue,valTokens) {
 
         const node = {
-            fieldToken: fieldToken,
-            opToken : opToken,
-            valToken: valToken,
-            children: null
+            fieldValue: fieldValue,
+            opValue : opValue,
+            valTokens: valTokens,
+            childNodes: null
         }
         return node;
     },
     /**
      * 
-     * @param {*} opToken  - AND or OR token
+     * @param {*} opValue  - AND or OR token
      * @param {*} childNodes - list of child nodes to be added
      * @param {boolean} allowSingleChild - for top level AND node (that maps to gr.addQuery() ) we want to allow a single child. 
      * @returns 
      */
-    newNodeBool: function(opToken,childNodes,allowSingleChild) {
+    newNodeBool: function(opValue,childNodes,allowSingleChild) {
 
         // Add a child node - (if the child node is the same operator then merge it with parent)
         // (ie a AND b AND c ) = a AND ( b AND c) = 
         function addNode(node,child) {
             // If AND node has AND child move grandchildren up (flatten the tree)
             // (same with "OR")
-            if (child.opToken.type === node.opToken.type) {
+            if (child.opValue.token === node.opValue.token) {
                 // copy grand-children up and ignore the child
                 //this._logInfo('GRANDCHILD ADOPT ')
                 node.childNodes.push(...child.childNodes);
@@ -208,9 +224,9 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         }
 
         const node = {
-            opToken : opToken,
-            fieldToken: null,
-            valToken: null,
+            opValue : opValue,
+            fieldValue: null,
+            valTokens: null,
             childNodes: []
         }
         if (!allowSingleChild && childNodes.length === 1) {
@@ -224,50 +240,65 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     },
 
     /**
-     * start with this.currentToken set
-     * end with currentToken at the next token
+     * start with this.currentTokenValue set
+     * end with currentTokenValue at the next token
      * @returns {Node}
      */
     parseSIMPLE: function () {
 
         let node;
 
-        if (this.currentToken.type === this.TOKEN_TYPES.LPAR) {
+        if (this.currentTokenValue.token === this.TOKENS.LPAR) {
 
-            this.getNextToken();
+            this.getNextTokenValue();
 
             node = this.parseAND();
 
-            this.expect([this.TOKEN_TYPES.RPAR]);
+            this.expectToken([this.TOKENS.RPAR]);
 
-            this.getNextToken();
+            this.getNextTokenValue();
 
             return node;
 
-        } else if (this.currentToken.type === this.TOKEN_TYPES.FIELD) {
+        } else if (this.currentTokenValue.token === this.TOKENS.FIELD) {
 
-            let fieldToken = this.currentToken;
+            let fieldValue = this.currentTokenValue;
 
-            this.getNextToken();
+            this.getNextTokenValue();
 
-            let opToken = this.expect( [this.TOKEN_TYPES.QUERYOP , this.TOKEN_TYPES.QUERYFIELDOP ]);
+            let opValue = this.expectTokenType( [this.TOKEN_TYPES.QUERYOP  ]);
 
-            this.getNextToken();
+            this.getNextTokenValue();
 
-            let valToken;
-            valToken = this.expect( [ this.TOKEN_TYPES.STRING ,this.TOKEN_TYPES.NUMBER , this.TOKEN_TYPES.FIELD ]);
+            let valTokens = [];
 
-            this.getNextToken();
+            let valTokenValue = this.expectToken( [
+                this.TOKENS.STRING 
+                ,this.TOKENS.NUMBER 
+                , this.TOKENS.FIELD ]) ;
 
-            if (valToken.type === this.TOKEN_TYPES.FIELD) {
-                this.
-                //add code to store fields for 
+            valTokens.push(valTokenValue);
 
+            this.getNextTokenValue();
+
+            if (opValue.token === this.TOKENS.BETWEEN ) {
+                // TODO 
+                this.expectToken( [ this.TOKENS.AND ] );
+
+                let num2 = this.getNextTokenValue();
+
+                this.expectToken( [ this.TOKENS.STRING , this.TOKENS.NUMBER ] );
+
+                valTokens.push(num2);
+
+                this.getNextTokenValue();
             }
-            return this.newNodeLeaf(fieldToken,opToken,valToken);
+
+            return this.newNodeLeaf(fieldValue,opValue,valTokens);
 
         }
     },
+
 
     skipSpace: function() {
         let p = this.stream.search(/\S/);
@@ -277,84 +308,93 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     },
 
     tokenTypeStr: function(tokenType) {
-        return `${tokenType.prefix}`;
+        return `${tokenType.txt}`;
     },
 
     tokenStr: function(token) {
-        return `${this.tokenTypeStr(token.type)}${token.value}`;
+        return `${this.tokenTypeStr(token.token)}${token.value}`;
     },
 
     nodeStr: function(node) {
         if (node.childNodes) {
-            return `${this.tokenStr(node.opToken)}( ${node.childNodes.map(this.nodeStr,this).join(' , ')} )`;
+            return `${this.tokenStr(node.opValue)}( ${node.childNodes.map(this.nodeStr,this).join(' , ')} )`;
         } else {
-            return `${this.tokenStr(node.fieldToken)} ${this.tokenStr(node.opToken)} ${this.tokenStr(node.valToken)}`;
+            return `${this.tokenStr(node.fieldValue)} ${this.tokenStr(node.opValue)} ${node.valTokens.map(this.tokenStr,this).join('@')}`;
         }
     },
+    expectToken: function(allowedTokens) {
 
-    expect: function(allowedTypes) {
-
-        if (allowedTypes.includes(this.currentToken.type)) {
-            return this.currentToken;
+        if (allowedTokens.includes(this.currentTokenValue.token)) {
+            return this.currentTokenValue;
         }
 
-        let types = allowedTypes.map(function(t) { return t.label;} );
+        const tokens = allowedTokens.map(function(t) { return t.txt;} );
 
         throw new Error(
-            `unexpected token ${this.tokenStr(this.currentToken)}: expected : ${types}`);
+            `unexpected token ${this.tokenStr(this.currentTokenValue)}: expected token : ${tokens}`);
+    },
+    expectTokenType: function(allowedTypes) {
+
+        if (allowedTypes.includes(this.currentTokenValue.token.type)) {
+            return this.currentTokenValue;
+        }
+
+        const types = allowedTypes.map(function(t) { return t.txt;} );
+
+        throw new Error(
+            `unexpected token type ${this.tokenStr(this.currentTokenValue)}: expected token type : ${types}`);
     },
 
-    getNextToken: function() {
+    getNextTokenValue: function() {
 
         this.skipSpace();
 
-        for (typeName in this.TOKEN_TYPES) {
+        for (const tokenName in this.TOKENS) {
 
-            let typeObj = this.TOKEN_TYPES[typeName];
+            let tokenObj = this.TOKENS[tokenName];
 
-            let match = this.stream.match(typeObj.re);
-
+            let match = this.stream.match(tokenObj.re);
 
             if (match !== null) {
-                //this._logInfo(`Match <<${this.stream}>> with <<${JSON.stringify(typeObj)}>> = ${JSON.stringify(match)}`);
+                //this._logInfo(`Match <<${this.stream}>> with <<${JSON.stringify(tokenObj)}>> = ${JSON.stringify(match[0])}`);
                 this.stream = this.stream.slice(match[0].length);
 
-                token = this.newToken(typeObj , match[0] );
+                const tokenValue = this.newTokenValue(tokenObj , match[0] );
 
-                if (typeObj === this.TOKEN_TYPES.STRING) {
+                if (tokenObj === this.TOKENS.STRING) {
                     // Remove quotes
-                    token.value = token.value.slice(1,-1);
+                    tokenValue.value = tokenValue.value.slice(1,-1);
                 }
 
-                this.currentToken = token;
-                return token;
+                this.currentTokenValue = tokenValue;
+                return tokenValue;
             }
         }
         throw new Error(`Unable to parse <<${this.stream}>>`);
     },
 
-    newToken: function(typeObj,value) {
-        return { type: typeObj , value: value };
+    newTokenValue: function(tokenObj,value) {
+        return { token: tokenObj , value: value };
     },
 
     newTokenAND: function() {
-        return this.newToken(this.TOKEN_TYPES.AND, "*AND*");
+        return this.newTokenValue(this.TOKENS.AND, "*AND*");
     },
 
     newTokenOR: function() {
-        return this.newToken(this.TOKEN_TYPES.OR, "*OR*");
+        return this.newTokenValue(this.TOKENS.OR, "*OR*");
     },
 
     newTokenSTRING: function(v) {
-        return this.newToken(this.TOKEN_TYPES.STRING, v);
+        return this.newTokenValue(this.TOKENS.STRING, v);
     },
 
     newTokenField: function(fieldPath) {
-        return this.newToken(this.TOKEN_TYPES.FIELD, fieldPath);
+        return this.newTokenValue(this.TOKENS.FIELD, fieldPath);
     },
 
     newTokenIN: function() {
-        return this.newToken(this.TOKEN_TYPES.QUERYOP, "IN");
+        return this.newTokenValue(this.TOKENS.QUERYOP, "IN");
     },
 
     /**
@@ -380,15 +420,34 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
         let newTree = expTree;
 
-        if (expTree.opToken.type !== this.TOKEN_TYPES.AND ) {
+        if (expTree.opValue.token === this.TOKENS.OR ) {
 
-            //this._logInfo('ADDING');
-            //// Add the child explicitly otherwise the code will reduce an AND node with only one child to be just the child.
-            newTree = this.newNodeBool(this.newTokenAND(),[expTree],true);
-            //this._logInfo(this.nodeStr(newTree));
+            if (!this.hasSimpleChild(expTree)) {
+
+
+                this._logInfo('ADDING');
+                //// Add the child explicitly otherwise the code will reduce an AND node with only one child to be just the child.
+                newTree = this.newNodeBool(this.newTokenAND(),[expTree],true);
+                //this._logInfo(this.nodeStr(newTree));
+            }
         }
         return newTree;
 
+    },
+
+    filterSimpleChildren: function(nodes) {
+        if (nodes) {
+            return this.filterNodesByOpTokenType(nodes,this.TOKEN_TYPES.QUERYOP);
+        }
+    },
+
+    hasSimpleChild: function(tree) {
+        const simple = this.filterSimpleNodes(tree.childNodes);
+        if (simple) {
+            return simple.length > 0;
+        } else {
+            return false;
+        }
     },
 
     hasComma: function(list) {
@@ -402,7 +461,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         function findMultipleORSameField(nodes) {
             let fieldsToValues = {};
 
-            let eqNodes = self.filterNodesByQueryOp(nodes,'=');
+            let eqNodes = self.filterNodesByOpToken(nodes,this.TOKENS.EQ);
 
             let eqFields = self.extractUniqueNodeFieldPaths(eqNodes);
 
@@ -429,10 +488,10 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             // Add nodes that are not equality nodes
             for (let n of oldNodes) {
 
-                if (n.opToken.type !== this.TOKEN_TYPES.QUERYOP ||
-                    n.opTokenValue !== '=' ) {
+                if (n.opValue.token !== this.TOKENS.QUERYOP ||
+                    n.opValueValue !== '=' ) {
                         newNodes.push(n);
-                } else if ( ! ( n.fieldToken in fieldsToValues )) {
+                } else if ( ! ( n.fieldValue in fieldsToValues )) {
                         newNodes.push(n);
                 } 
             }
@@ -455,7 +514,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             }
         }
 
-        if (expTree.opToken.type === this.TOKEN_TYPES.OR) {
+        if (expTree.opValue.token === this.TOKENS.OR) {
 
             let fieldsToValues = findMultipleORSameField(expTree.childNodes);
 
@@ -486,11 +545,6 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         Object.assign(target,source);
     },
 
-    filterNodesByQueryOp: function(nodes, opTokenValue ) {
-
-        return this.filterNodesByOpType(
-            nodes,this.TOKEN_TYPES.QUERYOP,opTokenValue);
-
         /*
         TEST CODE:
         var exp = "a = 1 AND b = 2 AND a > 3";
@@ -501,43 +555,43 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         -----
         >> [  a > 3]
         */
-    },
     /**
      * Filter a list of nodes by opType
      * @param {Node[]} nodes - list of nodes
-     * @param {*} opTokenType - tokenType to filter node.opToken
-     * @param {*} [opTokenValue] - token value  
+     * @param {Token} token - tokenType to filter node.opValue
      * @returns {Node[]} list of filtered nodes
      */
-    filterNodesByOpType: function(nodes, opTokenType, opTokenValue  ) {
+    filterNodesByOpToken: function(nodes, token ) {
 
-        if (opTokenValue === undefined) {
             return  nodes.filter(
                 (node) =>
-                    node.opToken.type === opTokenType );
-        } else {
+                    node.opValue.token === token );
+    },    /**
+     * Filter a list of nodes by opType
+     * @param {Node[]} nodes - list of nodes
+     * @param {TokenType} tokenType - tokenType to filter node.opValue
+     * @returns {Node[]} list of filtered nodes
+     */
+    filterNodesByOpTokenType: function(nodes, tokenType ) {
+
             return  nodes.filter(
                 (node) =>
-                    node.opToken.type === opTokenType && 
-                    node.opToken.value === opTokenValue
-            );
-
-        }
+                    node.opValue.token.type === tokenType );
     },
 
     /**
      * Filter a list of nodes by fieldPath
      * @param {Node[]} nodes - list of nodes
-     * @param {*} opTokenType - tokenType to filter node.opToken
-     * @param {*} [opTokenValue] - token value  
+     * @param {*} opValueType - tokenType to filter node.opValue
+     * @param {*} [opValueValue] - token value  
      * @returns {Node[]} list of filtered nodes
      */
     filterNodesByFieldPath: function(nodes, fieldPath  ) {
 
         return nodes.filter( 
             (node) => 
-                node.fieldToken.type === this.TOKEN_TYPES.FIELD &&
-                node.fieldToken.value === fieldPath  );
+                node.fieldValue.token === this.TOKENS.FIELD &&
+                node.fieldValue.value === fieldPath  );
         /*
         TEST CODE:
         var exp = "a = 1 AND b = 2 AND a = 3";
@@ -557,8 +611,8 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      */
     extractUniqueNodeFieldPaths: function(nodes) {
         let v = nodes.filter(
-            (node) => node.fieldToken != null ).map(
-            (node) => node.fieldToken.value );
+            (node) => node.fieldValue != null ).map(
+            (node) => node.fieldValue.value );
 
         return this.unique(v);
         /*
@@ -580,8 +634,8 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     extractUniqueNodeValues: function(nodes) {
 
         let v = nodes.filter(
-            (node) => node.valToken != null ).map(
-            (node) => node.valToken.value );
+            (node) => node.valTokens != null ).map(
+            (node) => node.valTokens[0].value );
 
         return this.unique(v);
         /*
@@ -643,7 +697,15 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 	unittests: function() {
 
 		let testgroups = {
+
             _unit_parseQueryExp : {
+                test_simple: {
+                    compute: function() {
+                        let tree = this.parseQueryExp('a = 1');
+                        return this.nodeStr(tree);
+                    },
+                    expect: "F:a ?:= #:1"
+                },
                 test_simpleand: {
                     compute: function() {
                         let tree = this.parseQueryExp('a = 1 AND b = 2');
@@ -666,7 +728,6 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
                     expect: "&:AND( |:OR( F:a ?:= #:1 , F:b ?:= #:2 ) , F:c ?:= #:3 )"
                 },
                 test_simpleor: {
-                    // Top level AND is always added (as top level gr is a collection of ANDS (unless NQ is used!) )
                     compute: function() {
                         let tree = this.parseQueryExp('sys_id = sys_id');
                         return this.nodeStr(tree);
@@ -674,12 +735,19 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
                     expect: "&:*AND*( |:OR( F:a ?:= #:1 , F:b ?:= #:2 ) )"
                 }, 
                 test_simpleor: {
-                    // Top level AND is always added (as top level gr is a collection of ANDS (unless NQ is used!) )
                     compute: function() {
                         let tree = this.parseQueryExp('a = 1 OR b = 2');
                         return this.nodeStr(tree);
                     },
-                    expect: "&:*AND*( |:OR( F:a ?:= #:1 , F:b ?:= #:2 ) )"
+                    expect: "|:OR( F:a ?:= #:1 , F:b ?:= #:2 )" // TODO
+                    //expect: "&:*AND*( |:OR( F:a ?:= #:1 , F:b ?:= #:2 ) )"
+                },
+                test_topleveland: {
+                    compute: function() {
+                        let tree = this.parseQueryExp('(a = 1 AND b = 2 ) OR ( c = 3 AND d = 4)');
+                        return this.nodeStr(tree);
+                    },
+                    expect: "&:*AND*( |:OR( &:AND( F:a ?:= #:1 , F:b ?:= #:2 ) , &:AND( F:c ?:= #:3 , F:d ?:= #:4 ) ) )"
                 }, 
             }
 		}
