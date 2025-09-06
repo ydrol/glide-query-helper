@@ -13,7 +13,7 @@ ScriptUtils_QueryParser.prototype = /** @lends ScriptUtils_QueryParser.prototype
         FIELD:  { label: "FIELD",   re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
         STRING: { label: "STRING",  re: /^('[^']*'|"[^"]*")/ } ,
         NUMBER: { label: "NUMBER",  re: /^[+-]?[0-9]+(|\.[0-9]+)/ },
-        QUERYOP:{ label: "QUERYOP", re: /^(=|!=|>=|<=|IN\b)/ },
+        QUERYOP:{ label: "QUERYOP", re: /^(=|!=|>=|<=|<|>|IN\b)/ },
         AND:    { label: "AND",     re: /^AND\b/ },
         OR:     { label: "OR",      re: /^OR\b/ },
         LPAR:   { label: "_(_",     re: /^\(/ },
@@ -290,6 +290,18 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         return this.newToken(this.TOKEN_TYPES.OR, "*OR*");
     },
 
+    newTokenSTRING: function(v) {
+        return this.newToken(this.TOKEN_TYPES.STRING, v);
+    },
+
+    newTokenField: function(fieldPath) {
+        return this.newToken(this.TOKEN_TYPES.FIELD, fieldPath);
+    },
+
+    newTokenIN: function() {
+        return this.newToken(this.TOKEN_TYPES.QUERYOP, "IN");
+    },
+
     /**
      * Glide AND/OR operations have the following limitations:
      * 1.  can one add simple clauses at a time. 
@@ -324,18 +336,80 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
     },
 
+    hasComma: function(list) {
+        return list.some((e) => e.includes(','));
+    },
+
     replaceOrIN: function(expTree) {
-        if (expTree.childNodes) {
-            let newNodes = expTree.childNodes.map(this.replaceOrIN,this);
-            expTree.childNodes = newNodes;
-        }
-        if (expTree.opToken.type === this.TOKEN_TYPES.OR) {
-            let orValsByField = {};
-            for (child of expTree.childNodes) {
-                if (child.opToken.type === this.TOKEN_TYPES.QUERYOP) {
-                    if (child.opToken.value === '=') {
+
+        let self = this;
+
+        function findMultipleORSameField(nodes) {
+            let fieldsToValues = {};
+
+            let eqNodes = self.filterNodesByQueryOp(nodes,'=');
+
+            let eqFields = self.extractUniqueNodeFieldPaths(eqNodes);
+
+            if (eqNodes.length !== eqFields.length) {
+                // Some Field occures more than once
+                for(fieldPath of eqFields) {
+                    let nodesByField = self.filterNodesByFieldPath(eqNodes,fieldPath);
+                    if (nodesByField.length > 1) {
+                        let values = self.extractUniqueNodeValues(nodesByField);
+                        if (!self.hasComma(values)) {
+                            // IN only works if there is no comma in the values
+                            fieldsToValues[fieldPath] =  self.extractUniqueNodeValues(nodesByField);
+                        }
+                        
                     }
                 }
+            }
+            return fieldsToValues;
+        }
+
+        function buildNewList(nodes,fieldsToValues) {
+            let nodes = [];
+            for (let n of nodes) {
+                if (n.opToken.type !== this.TOKEN_TYPES.QUERYOP ||
+                    n.opTokenValue !== '=' ) {
+                        nodes.push(n);
+                } else if ( ! ( n.fieldToken in fieldsToValues )) {
+                        nodes.push(n);
+                } 
+            }
+            for (f in fieldsToValues) {
+
+                let n = self.newNodeLeaf(
+                    self.newTokenField(f),
+                    self.newTokenIN(),
+                    self.newTokenSTRING(fieldsToValues.join()));
+
+                nodes.push(n);
+            }
+            return nodes;
+        }
+
+        // Do subtree first.
+        if (expTree.childNodes) {
+            for(let n of expTree.childNodes) {
+                this.replaceOrIN(n);
+            }
+        }
+
+        if (expTree.opToken.type === this.TOKEN_TYPES.OR) {
+
+            let fieldsToValues = findMultipleORSameField(expTree.childNodes);
+
+            var newChildList = buildNewList(expTree.childNodes,fieldsToValues);
+
+            self._assert(newChildList.length,'No children?');
+
+            expTree.childNodes = newChildList;
+        
+            if (expTree.childNodes.length  == 1) {
+                // TODO 
+                copy child into current
             }
         }
     },
@@ -345,6 +419,16 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         return this.filterNodesByOpType(
             nodes,this.TOKEN_TYPES.QUERYOP,opTokenValue);
 
+        /*
+        TEST CODE:
+        var exp = "a = 1 AND b = 2 AND a > 3";
+        var qp = new ScriptUtils_QueryParser();
+        var tree = qp.parseQueryExp(exp);
+        var n = qp.filterNodesByQueryOp(tree.childNodes,'>');
+        gs.info(JSON.stringify(n));
+        -----
+        >> [  a > 3]
+        */
     },
     /**
      * Filter a list of nodes by opType
@@ -376,12 +460,22 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      * @param {*} [opTokenValue] - token value  
      * @returns {Node[]} list of filtered nodes
      */
-    filterNodesByField: function(nodes, fieldPath  ) {
+    filterNodesByFieldPath: function(nodes, fieldPath  ) {
 
         return nodes.filter( 
             (node) => 
                 node.fieldToken.type === this.TOKEN_TYPES.FIELD &&
                 node.fieldToken.value === fieldPath  );
+        /*
+        TEST CODE:
+        var exp = "a = 1 AND b = 2 AND a = 3";
+        var qp = new ScriptUtils_QueryParser();
+        var tree = qp.parseQueryExp(exp);
+        var n = qp.filterNodesByFieldPath(tree.childNodes,'a');
+        gs.info(JSON.stringify(n,null,2));
+        -----
+        >> [  a=1  , a=3]
+        */
     },
 
     /**
@@ -389,10 +483,38 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      * @param {Nodes[]} nodes 
      * @returns {object[]} list of value objects.
      */
-    extractNodeValues: function(nodes) {
+    extractUniqueNodeFieldPaths: function(nodes) {
+        let v = nodes.filter(
+            (node) => node.fieldToken != null ).map(
+            (node) => node.fieldToken.value );
+
+        return this.unique(v);
         /*
         TEST CODE:
-        var exp = "A = 1 AND B = 2 AND C = 3";
+        var exp = "a = 1 AND b = 2 AND c = 3 AND d = 2";
+        var qp = new ScriptUtils_QueryParser();
+        var tree = qp.parseQueryExp(exp);
+        var v = qp.extractNodeFieldPaths(tree.childNodes);
+        gs.info(JSON.stringify(v));
+        -----
+        >> [a,b,c,d]
+        */
+    },
+    /**
+     * Extract list of values from list of nodes
+     * @param {Nodes[]} nodes 
+     * @returns {object[]} list of value objects.
+     */
+    extractUniqueNodeValues: function(nodes) {
+
+        let v = nodes.filter(
+            (node) => node.valToken != null ).map(
+            (node) => node.valToken.value );
+
+        return this.unique(v);
+        /*
+        TEST CODE:
+        var exp = "a = 1 AND b = 2 AND c = 3 AND d = 2";
         var qp = new ScriptUtils_QueryParser();
         var tree = qp.parseQueryExp(exp);
         var v = qp.extractNodeValues(tree.childNodes);
@@ -400,16 +522,6 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         -----
         >> [1,2,3]
         */
-
-
-        gs.info('Nodes {0}',JSON.stringify(nodes));
-
-        let v = nodes.filter(
-            (node) => node.valToken !== null ).map(
-            (node) => node.valToken.value );
-
-        gs.info('v {0}',JSON.stringify(v));
-        return this.unique(v);
     },
 
     unique: function(list) {
