@@ -13,7 +13,7 @@ ScriptUtils_QueryParser.prototype = /** @lends ScriptUtils_QueryParser.prototype
         FIELD:  { label: "FIELD",   re: /^[a-z][a-z_0-9]*(\.[a-z][a-z_0-9]*|)\b/ },
         STRING: { label: "STRING",  re: /^('[^']*'|"[^"]*")/ } ,
         NUMBER: { label: "NUMBER",  re: /^[+-]?[0-9]+(|\.[0-9]+)/ },
-        OP:     { label: "QUERYOP", re: /^(=|!=|>=|<=|IN\b)/ },
+        QUERYOP:{ label: "QUERYOP", re: /^(=|!=|>=|<=|IN\b)/ },
         AND:    { label: "AND",     re: /^AND\b/ },
         OR:     { label: "OR",      re: /^OR\b/ },
         LPAR:   { label: "_(_",     re: /^\(/ },
@@ -78,6 +78,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         gs.info(this.nodeStr(expTree));
 
         gs.info(JSON.stringify(expTree,null,4));
+        return expTree;
 
     },
     /**
@@ -197,7 +198,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
             this.getNextToken();
 
-            let opToken = this.expect( [this.TOKEN_TYPES.OP]);
+            let opToken = this.expect( [this.TOKEN_TYPES.QUERYOP]);
 
             this.getNextToken();
 
@@ -322,6 +323,107 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         return newTree;
 
     },
+
+    replaceOrIN: function(expTree) {
+        if (expTree.childNodes) {
+            let newNodes = expTree.childNodes.map(this.replaceOrIN,this);
+            expTree.childNodes = newNodes;
+        }
+        if (expTree.opToken.type === this.TOKEN_TYPES.OR) {
+            let orValsByField = {};
+            for (child of expTree.childNodes) {
+                if (child.opToken.type === this.TOKEN_TYPES.QUERYOP) {
+                    if (child.opToken.value === '=') {
+                    }
+                }
+            }
+        }
+    },
+
+    filterNodesByQueryOp: function(nodes, opTokenValue ) {
+
+        return this.filterNodesByOpType(
+            nodes,this.TOKEN_TYPES.QUERYOP,opTokenValue);
+
+    },
+    /**
+     * Filter a list of nodes by opType
+     * @param {Node[]} nodes - list of nodes
+     * @param {*} opTokenType - tokenType to filter node.opToken
+     * @param {*} [opTokenValue] - token value  
+     * @returns {Node[]} list of filtered nodes
+     */
+    filterNodesByOpType: function(nodes, opTokenType, opTokenValue  ) {
+
+        if (opTokenValue === undefined) {
+            return  nodes.filter(
+                (node) =>
+                    node.opToken.type === opTokenType );
+        } else {
+            return  nodes.filter(
+                (node) =>
+                    node.opToken.type === opTokenType && 
+                    node.opToken.value === opTokenValue
+            );
+
+        }
+    },
+
+    /**
+     * Filter a list of nodes by fieldPath
+     * @param {Node[]} nodes - list of nodes
+     * @param {*} opTokenType - tokenType to filter node.opToken
+     * @param {*} [opTokenValue] - token value  
+     * @returns {Node[]} list of filtered nodes
+     */
+    filterNodesByField: function(nodes, fieldPath  ) {
+
+        return nodes.filter( 
+            (node) => 
+                node.fieldToken.type === this.TOKEN_TYPES.FIELD &&
+                node.fieldToken.value === fieldPath  );
+    },
+
+    /**
+     * Extract list of values from list of nodes
+     * @param {Nodes[]} nodes 
+     * @returns {object[]} list of value objects.
+     */
+    extractNodeValues: function(nodes) {
+        /*
+        TEST CODE:
+        var exp = "A = 1 AND B = 2 AND C = 3";
+        var qp = new ScriptUtils_QueryParser();
+        var tree = qp.parseQueryExp(exp);
+        var v = qp.extractNodeValues(tree.childNodes);
+        gs.info(JSON.stringify(v));
+        -----
+        >> [1,2,3]
+        */
+
+
+        gs.info('Nodes {0}',JSON.stringify(nodes));
+
+        let v = nodes.filter(
+            (node) => node.valToken !== null ).map(
+            (node) => node.valToken.value );
+
+        gs.info('v {0}',JSON.stringify(v));
+        return this.unique(v);
+    },
+
+    unique: function(list) {
+        return [...new Set(list)];
+    },
+
+    _assert: function(x,msg,...rest) {
+        if (!x) {
+            throw new Error(msg,...rest);
+        }
+    },
+
+
+    // F = 1 or F = 2 or f = 3   => f in 1,2,3
 
     type: "ScriptUtils_QueryParser"
 }
