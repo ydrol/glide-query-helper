@@ -26,6 +26,38 @@ ORDER BY sys_script0.`order`,sys_script0.`name`,sys_script0.`sys_id` /* dev30750
 =====================================
 gr.addQuery('sys_id','ANYTHING',null);
 AND 1 = 1 
+gr.addQuery('sys_id','NOTANYTHING',null);
+WHERE 0 = 1 
+
+BUT ServiceNow might discards any  addConditionaddOrCondtion added to the ANYTHING!
+
+Eg.
+var gr = new GlideRecord('task');
+
+var c = gr.addQuery('sys_id','NOTANYTHING',null);
+
+var e2 = c.addOrCondition('short_description','=','E2');
+gs.info(gr.getEncodedQuery());
+
+
+gs.trace(1);
+
+gr.query();
+v=gr.getRowCount();
+gs.trace(0);
+gs.info(v);
+-------------------------
+SELECT task0.`sys_id` FROM task task0  WHERE 0 = 1
+----------------------------
+
+So better to use SAMEAS / NSAMEAS
+var c = gr.addQuery('sys_id','NSAMEAS','sys_id');
+var e2 = c.addOrCondition('short_description','=','E2');
+-----
+WHERE (task0.`sys_id` != task0.`sys_id` OR task0.`short_description` = 'E2') 
+-----
+
+
 
 gr.addQuery('sys_mod_count','BETWEEN','2@1');
 AND (task0.`sys_mod_count` >= 2 AND task0.`sys_mod_count` <= 1)
