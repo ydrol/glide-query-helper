@@ -175,7 +175,16 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
             throw new Error(`Stopped at <<${this.stream}>>`);
         }
         expTree = this.insertRootAND(expTree);
-        this._logInfo(this.nodeStr(expTree));
+
+        this.addTrueFalseLeafNodes(tree);
+
+        //this._logInfo(this.nodeStr(expTree));
+
+        //const n = this.hasLeafChild(expTree);
+        //this._logInfo(`HAS LEAF CHILD ${n}`);
+
+        //const m = this.filterLeafNodes(expTree.childNodes);
+        //this._logInfo(`NUM LEAF CHILDREN ${m.length}`);
 
         //this._logInfo(JSON.stringify(expTree,null,4));
         return expTree;
@@ -454,7 +463,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
         if (expTree.opValue.token === this.TOKENS.OR ) {
 
-            if (!this.hasSimpleChild(expTree)) {
+            if (!this.hasLeafChild(expTree)) {
 
 
                 this._logInfo('ADDING');
@@ -467,14 +476,102 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
     },
 
-    filterSimpleChildren: function(nodes) {
+    /**
+     * Go thorugh a tree - if any node doesnt have leaf nodes add them in
+     * This needs to be done for more complex expressions as SN API only 
+     * allows leaf nodes to be added individually and all peer nodes must
+     * have the same operator (AND|OR)
+     * @param {Tree} tree 
+     */
+    addTrueFalseLeafNodes: function(tree) {
+
+        if (tree.childNodes) {
+
+            for(const n of tree.childNodes) {
+                this.addTrueFalseLeafNodes(n);
+            }
+
+            if (!this.hasLeafChild(tree)) {
+
+                if (tree.opValue.token === this.TOKENS.AND) {
+
+                    let n = this.newNodeLeafAlwaysTrue();
+                    tree.childNodes.unshift(n);
+
+                } else if (tree.opValue.token === this.TOKENS.OR) {
+
+                    let n = this.newNodeLeafAlwaysFalse();
+                    tree.childNodes.unshift(n);
+
+                } else {
+                    throw new Error(`Unable to add child to ${this.nodeStr(tree)}`);
+                }
+
+            }
+        }
+
+    },
+
+    /**
+     * Create a simple node that is equivalent to 1 = 1
+     * It should be simple enough to be removed by DB Query optimizer.
+     * 
+     * This allows Glide record AND to be created that has no leaf nodes
+     * 
+     * eg. ( A OR B ) AND ( (C AND D) OR (E AND F) )
+     * 
+     * the second bit cant be added normally. eg
+
+     * A = gr.addQuery(A).addOrCondition(B)
+
+     * X = gr.addQuery(1=0)
+       C = X.addOrCondition(C).addCondition(D)
+       C = X.addOrCondition(E).addCondition(F)
+
+     * 
+     * @returns {Node}
+     */
+    newNodeLeafAlwaysTrue: function() {
+        // tried this.newNodeLeaf('sys_id','ANYTHING',null); but SN doesnt chain on this condition
+        return this.newNodeLeaf('sys_id','SAMEAS','sys_id');
+    },
+
+    /**
+     * Return a node that is equivalent to WHERE 1 = 0
+     * It should be simple enough to be removed by DB Query optimizer.
+     * 
+     * This can be used to start an OR chain if there are no child leaf nodes.
+     * eg. ( A AND B ) OR ( C AND D ) - cant be added via addOrCondition
+     * 
+     * cond.addOrCondition(A).addCondition(B)
+     * cond.addOrCondition(C).addCondition(D)
+     * 
+     * @returns {Node}
+     */
+    newNodeLeafAlwaysFalse: function() {
+        // tried this.newNodeLeaf('sys_id','NOTANYTHING',null); but SN doesnt chain on this condition
+        return this.newNodeLeaf('sys_id','NSAMEAS','sys_id');
+    },
+
+
+    /**
+     * filter list of nodes to those with simple Conditions
+     * @param {Node[]} nodes 
+     * @returns {Node[]} return simple nodes
+     */
+    filterLeafNodes: function(nodes) {
         if (nodes) {
-            return this.filterNodesByOpTokenType(nodes,this.TOKEN_TYPES.QUERYOP);
+            return nodes.filter((node) => !node.childNodes || node.childNodes.length ===0 ) ;
         }
     },
 
-    hasSimpleChild: function(tree) {
-        const simple = this.filterSimpleNodes(tree.childNodes);
+    /**
+     * Return true if a child node is a simple (terminal) one.
+     * @param {Tree} tree 
+     * @returns {boolean} 
+     */
+    hasLeafChild: function(tree) {
+        const simple = this.filterLeafNodes(tree.childNodes);
         if (simple) {
             return simple.length > 0;
         } else {
@@ -482,6 +579,11 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         }
     },
 
+    /**
+     * Check if list contains a comma (can't use IN if values have comma )
+     * @param {string[]} list 
+     * @returns {boolean} - true if any item has a comma
+     */
     hasComma: function(list) {
         return list.some((e) => e.includes(','));
     },
@@ -596,9 +698,10 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     filterNodesByOpToken: function(nodes, token ) {
 
             return  nodes.filter(
-                (node) =>
-                    node.opValue.token === token );
-    },    /**
+                (node) => node.opValue.token === token
+            );
+    },
+    /**
      * Filter a list of nodes by opType
      * @param {Node[]} nodes - list of nodes
      * @param {TokenType} tokenType - tokenType to filter node.opValue
@@ -607,8 +710,8 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     filterNodesByOpTokenType: function(nodes, tokenType ) {
 
             return  nodes.filter(
-                (node) =>
-                    node.opValue.token.type === tokenType );
+                (node) => node.opValue.token.type === tokenType
+            );
     },
 
     /**
@@ -759,13 +862,6 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
                     },
                     expect: "&:AND( |:OR( F:a ?:= #:1 , F:b ?:= #:2 ) , F:c ?:= #:3 )"
                 },
-                test_simpleor: {
-                    compute: function() {
-                        let tree = this.parseQueryExp('sys_id = sys_id');
-                        return this.nodeStr(tree);
-                    },
-                    expect: "&:*AND*( |:OR( F:a ?:= #:1 , F:b ?:= #:2 ) )"
-                }, 
                 test_simpleor: {
                     compute: function() {
                         let tree = this.parseQueryExp('a = 1 OR b = 2');
