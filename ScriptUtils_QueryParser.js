@@ -154,6 +154,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     */
     parseQueryExp: function(queryExpression) {
 
+        this._logInfo(`Parse:${queryExpression}`);
         this.stream = queryExpression;
         this.streamPos = 0;
 
