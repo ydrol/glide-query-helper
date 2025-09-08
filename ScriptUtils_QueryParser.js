@@ -176,7 +176,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
         }
         expTree = this.insertRootAND(expTree);
 
-        this.addTrueFalseLeafNodes(tree);
+        this.addTrueFalseLeafNodes(expTree);
 
         //this._logInfo(this.nodeStr(expTree));
 
@@ -435,7 +435,15 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     },
 
     newTokenIN: function() {
-        return this.newTokenValue(this.TOKENS.QUERYOP, "IN");
+        return this.newTokenValue(this.TOKENS.IN, "IN");
+    },
+
+    newTokenSAMEAS: function() {
+        return this.newTokenValue(this.TOKENS.EQ, "SAMEAS");
+    },
+
+    newTokenNSAMEAS: function() {
+        return this.newTokenValue(this.TOKENS.EQ, "NSAMEAS");
     },
 
     /**
@@ -463,7 +471,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
 
         if (expTree.opValue.token === this.TOKENS.OR ) {
 
-            if (!this.hasLeafChild(expTree)) {
+            if (!this.hasLeafNodes(expTree)) {
 
 
                 this._logInfo('ADDING');
@@ -477,10 +485,13 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
     },
 
     /**
-     * Go thorugh a tree - if any node doesnt have leaf nodes add them in
-     * This needs to be done for more complex expressions as SN API only 
-     * allows leaf nodes to be added individually and all peer nodes must
-     * have the same operator (AND|OR)
+     * Go through a tree - if any node has children that only have subtrees (no leafnodes)
+     * then we need to inject a leafNode so we can use the SN API to create the full condition.
+     * eg. 
+     * ( A OR B ) AND ( (C AND D) OR (E AND F) )
+     * becomes:
+     * ( A OR B ) AND ( FALSE_LEAF OR (C AND D) OR (E AND F) )
+     * 
      * @param {Tree} tree 
      */
     addTrueFalseLeafNodes: function(tree) {
@@ -491,20 +502,31 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
                 this.addTrueFalseLeafNodes(n);
             }
 
-            if (!this.hasLeafChild(tree)) {
+            const childrenWithoutLeaves = this.getChildrenWithoutLeafNodes(tree);
 
-                if (tree.opValue.token === this.TOKENS.AND) {
+            if (childrenWithoutLeaves && childrenWithoutLeaves.length) {
 
-                    let n = this.newNodeLeafAlwaysTrue();
-                    tree.childNodes.unshift(n);
+                for(const child of childrenWithoutLeaves) {
 
-                } else if (tree.opValue.token === this.TOKENS.OR) {
+                    if (child.opValue.token === this.TOKENS.AND) {
 
-                    let n = this.newNodeLeafAlwaysFalse();
-                    tree.childNodes.unshift(n);
+                        // Add TRUE leaf to allow use of GlideQueryCondition constructors: 
+                        // (..) AND (..)  ->  TRUE AND (..) AND (..)
+                        // The TRUE should be remove by MariaDB Query optimizer
+                        let n = this.newNodeLeafAlwaysTrue();
+                        child.childNodes.unshift(n);
 
-                } else {
-                    throw new Error(`Unable to add child to ${this.nodeStr(tree)}`);
+                    } else if (child.opValue.token === this.TOKENS.OR) {
+
+                        // Add FALSE leaf to allow use of GlideQueryCondition constructors: 
+                        // (..) OR (..)  ->  FALSE OR (..) OR (..)
+                        // The FALSE should be remove by MariaDB Query optimizer
+                        let n = this.newNodeLeafAlwaysFalse();
+                        child.childNodes.unshift(n);
+
+                    } else {
+                        throw new Error(`Expected AND|OR child : ${this.nodeStr(child)}`);
+                    }
                 }
 
             }
@@ -533,7 +555,10 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      */
     newNodeLeafAlwaysTrue: function() {
         // tried this.newNodeLeaf('sys_id','ANYTHING',null); but SN doesnt chain on this condition
-        return this.newNodeLeaf('sys_id','SAMEAS','sys_id');
+        return this.newNodeLeaf(
+            this.newTokenField('sys_id')
+            ,this.newTokenValue(this.TOKENS.EQ, '=' )
+            ,[this.newTokenField('sys_id')]);
     },
 
     /**
@@ -550,18 +575,21 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      */
     newNodeLeafAlwaysFalse: function() {
         // tried this.newNodeLeaf('sys_id','NOTANYTHING',null); but SN doesnt chain on this condition
-        return this.newNodeLeaf('sys_id','NSAMEAS','sys_id');
+        return this.newNodeLeaf(
+            this.newTokenField('sys_id')
+            ,this.newTokenValue(this.TOKENS.NE, '!=' )
+            ,[this.newTokenField('sys_id')]);
     },
 
 
     /**
      * filter list of nodes to those with simple Conditions
-     * @param {Node[]} nodes 
+     * @param {Node} node 
      * @returns {Node[]} return simple nodes
      */
-    filterLeafNodes: function(nodes) {
-        if (nodes) {
-            return nodes.filter((node) => !node.childNodes || node.childNodes.length ===0 ) ;
+    getLeafNodes: function(node) {
+        if (node) {
+            return node.filter((child) => this.isLeafNode(child) ) ;
         }
     },
 
@@ -570,14 +598,59 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
      * @param {Tree} tree 
      * @returns {boolean} 
      */
-    hasLeafChild: function(tree) {
-        const simple = this.filterLeafNodes(tree.childNodes);
-        if (simple) {
-            return simple.length > 0;
-        } else {
-            return false;
+    hasLeafNodes: function(node) {
+        if (this.hasChildren(node)) {
+            return node.childNodes.some((child) =>  this.isLeafNode(child) ) ;
+        }
+        return false;
+    },
+
+    hasOnlySubtrees: function(node) {
+
+        if (this.hasChildren(node)) {
+            return node.childNodes.every((child) =>  this.hasChildren(child) ) ;
+        }
+        return false;
+    },
+
+    hasChildren: function(node) {
+        return node.childNodes && node.childNodes.length;
+    },
+    isLeafNode: function(node) {
+        return !this.hasChildren(node);
+    },
+
+    /**
+     * get all children that do not have leaf nodes.
+     * 
+     * SN API cannot begin to add a child condition unless it has a leaf grandchild 
+     * for the first API call.
+     * eg. (A OR B ) AND (C OR D ) Can be added using the leaves A and C
+     * gr.addQuery(A).addOrCondition(B)
+     * gr.addQuery(C).addOrCondition(D)
+     * 
+     * but 
+     * eg. (A OR B ) AND (( C AND E ) OR (D AND F ) ) Cannot be added as there is no direct leaf on the RHS.
+     * 
+     * it will need to be changed to
+     * 
+     * eg. (A OR B ) AND ( ALWAYS_FALSE_CONDITION OR ( C AND E ) OR (D AND F ) )
+     * then can be added as :
+     * x = gr.addQuery(ALWAYS_FALSE_CONDITION);
+     * x.addOrCondition(C).addCondition(E)
+     * x.addOrCondition(D).addCondition(F)
+     * 
+     * A AND ( B OR C )
+     * A AND ( B OR C )
+     * 
+     * @param {Node} node 
+     */
+    getChildrenWithoutLeafNodes: function(node) {
+        if (this.hasChildren(node)) {
+            return node.childNodes.filter((child) => this.hasOnlySubtrees(child) );
         }
     },
+
 
     /**
      * Check if list contains a comma (can't use IN if values have comma )
@@ -875,7 +948,7 @@ new ScriptUtils_QueryParser().parseQueryExp('a = 1 AND b = 2');
                         let tree = this.parseQueryExp('(a = 1 AND b = 2 ) OR ( c = 3 AND d = 4)');
                         return this.nodeStr(tree);
                     },
-                    expect: "&:*AND*( |:OR( &:AND( F:a ?:= #:1 , F:b ?:= #:2 ) , &:AND( F:c ?:= #:3 , F:d ?:= #:4 ) ) )"
+                    expect: "&:*AND*( |:OR( F:sys_id ?:!= F:sys_id , &:AND( F:a ?:= #:1 , F:b ?:= #:2 ) , &:AND( F:c ?:= #:3 , F:d ?:= #:4 ) ) )"
                 }, 
             }
 		}
